@@ -348,10 +348,14 @@ def render_sidebar():
     """Функция отрисовки глобального бокового меню и фильтров с кэшированием между страницами"""
     import io
     
-    # 1. РУКОВОДСТВО ДОСТУПНО ВСЕГДА (Даже до загрузки файла)
+    # 1. РУКОВОДСТВО И ДЕМО-ПЛАШКА ДОСТУПНЫ ВСЕГДА
     with st.sidebar:
         if st.button("📖 Открыть руководство", use_container_width=True, type="primary"):
             show_help_dialog()
+            
+        # --- ПЛАШКА ДЕМО-РЕЖИМА ---
+        if st.session_state.get('is_demo', False):
+            st.error("⚠️ **ДЕМО-РЕЖИМ** (Тестовые данные)")
             
     # 2. ПРОВЕРКА ДАННЫХ
     if 'df_raw' not in st.session_state or st.session_state['df_raw'] is None:
