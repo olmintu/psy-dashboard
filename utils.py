@@ -253,7 +253,14 @@ def get_name(col):
 @st.cache_data(ttl=3600)
 def load_data(file):
     try:
-        return pd.read_excel(file)
+        df = pd.read_excel(file)
+
+        text_cols = df.select_dtypes(include=['object']).columns
+        for col in text_cols:
+            df[col] = df[col].astype(str).str.strip().str.capitalize()
+            df[col] = df[col].replace({'Nan': np.nan, 'None': np.nan})
+            
+        return df
     except Exception as e:
         st.error(f"Ошибка загрузки файла: {e}")
         return None
