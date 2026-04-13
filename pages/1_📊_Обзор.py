@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from utils import render_sidebar, get_name, get_descriptive_stats
+from utils import render_sidebar, get_name, get_descriptive_stats 
 
 st.set_page_config(page_title="Обзор выборки", layout="wide", page_icon="📊")
 

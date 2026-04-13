@@ -344,10 +344,32 @@ def calc_correlation_matrices(df_subset, method):
             p_matrix.iloc[j, i] = p_val 
     return r_matrix, p_matrix
 
+def init_session_state():
+    """Инициализация базовых переменных и автозагрузка демо-данных"""
+    if 'disable_auto_demo' not in st.session_state:
+        st.session_state['disable_auto_demo'] = False
+    if 'df_raw' not in st.session_state:
+        st.session_state['df_raw'] = None
+    if 'is_demo' not in st.session_state:
+        st.session_state['is_demo'] = False
+
+    # Автозагрузка демо-файла, если данных нет и это не запрещено
+    if st.session_state['df_raw'] is None and not st.session_state['disable_auto_demo']:
+        try:
+            import os
+            if os.path.exists('TEST_RESULTS.xlsx'):
+                # Важно: вызываем загрузку напрямую из pandas или через вашу load_data
+                # Но без st.rerun(), так как это происходит в начале выполнения скрипта
+                st.session_state['df_raw'] = pd.read_excel('TEST_RESULTS.xlsx')
+                st.session_state['is_demo'] = True
+        except:
+            pass
 def render_sidebar():
     """Функция отрисовки глобального бокового меню и фильтров с кэшированием между страницами"""
     import io
-    
+    # Сначала всегда проверяем состояние (на случай, если функция вызвана без предварительной инициализации)
+    if 'df_raw' not in st.session_state:
+        init_session_state()
     # 1. РУКОВОДСТВО И ДЕМО-ПЛАШКА ДОСТУПНЫ ВСЕГДА
     with st.sidebar:
         if st.button("📖 Открыть руководство", use_container_width=True, type="primary"):
@@ -358,7 +380,7 @@ def render_sidebar():
             st.error("⚠️ **ДЕМО-РЕЖИМ** (Тестовые данные)")
             
     # 2. ПРОВЕРКА ДАННЫХ
-    if 'df_raw' not in st.session_state or st.session_state['df_raw'] is None:
+    if st.session_state['df_raw'] is None:
         st.sidebar.warning("👈 Пожалуйста, загрузите данные на Главной странице.")
         return None
         
