@@ -86,7 +86,9 @@ if len(corr_cols) > 1:
             elif sig_level == "p < 0.001 (***)": p_thresh = 0.001
             else: p_thresh = 1.0 
             
-        with filter_c3: link_type = st.radio("Направление связи:", ["Все", "Прямая (r > 0)", "Обратная (r < 0)"])
+        with filter_c3: 
+            link_type = st.radio("Направление связи:", ["Все", "Прямая (r > 0)", "Обратная (r < 0)"])
+            cross_method_only = st.checkbox("🔀 Только межметодические связи", value=False)
 
         links = []
         for i in range(len(saved_cols)):
@@ -94,6 +96,11 @@ if len(corr_cols) > 1:
                 c1, c2 = saved_cols[i], saved_cols[j]
                 r, p = r_matrix.loc[c1, c2], p_matrix.loc[c1, c2]
                 
+                if cross_method_only:
+                    pref1 = c1.split('_')[0] if '_' in c1 else c1
+                    pref2 = c2.split('_')[0] if '_' in c2 else c2
+                    if pref1 == pref2:
+                        continue 
                 if min_r <= abs(r) <= max_r and (sig_level == "Показывать незначимые" or p < p_thresh):
                     if link_type == "Все" or (link_type == "Прямая (r > 0)" and r > 0) or (link_type == "Обратная (r < 0)" and r < 0): 
                         s = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else ""))
