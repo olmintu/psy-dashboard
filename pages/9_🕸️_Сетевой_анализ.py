@@ -20,7 +20,9 @@ if 'safe_cb_b_9' not in st.session_state: st.session_state.safe_cb_b_9 = False
 if 'safe_cb_m_9' not in st.session_state: st.session_state.safe_cb_m_9 = False
 if 'safe_cb_i_9' not in st.session_state: st.session_state.safe_cb_i_9 = False
 if 'safe_net_vars' not in st.session_state: st.session_state.safe_net_vars = []
+if 'safe_cross_method_9' not in st.session_state: st.session_state.safe_cross_method_9 = False
 
+if 'cross_method_9' not in st.session_state: st.session_state.cross_method_9 = st.session_state.safe_cross_method_9
 if 'cb_b_9' not in st.session_state: st.session_state.cb_b_9 = st.session_state.safe_cb_b_9
 if 'cb_m_9' not in st.session_state: st.session_state.cb_m_9 = st.session_state.safe_cb_m_9
 if 'cb_i_9' not in st.session_state: st.session_state.cb_i_9 = st.session_state.safe_cb_i_9
@@ -58,8 +60,10 @@ with c_net2:
     threshold = st.slider(
         "Отсекать слабые связи (Порог |r|):", 
         min_value=0.1, max_value=0.8, value=0.3, step=0.05,
+        key="threshold_9", 
         help="Увеличьте порог, если граф похож на запутанный клубок ниток. Оставьте только самые сильные связи (>0.4)."
     )
+    cross_method_only_9 = st.checkbox("🔀 Только межметодические связи", value=False, key="cross_method_9")
 
 # КНОПКА ПОСТРОЕНИЯ (С сохранением в память)
 if st.button("🕸️ Построить нейросеть личности", type="primary"):
@@ -79,6 +83,12 @@ if st.button("🕸️ Построить нейросеть личности", t
                     col1 = net_vars[i]
                     col2 = net_vars[j]
                     corr_val = corr_matrix.loc[col1, col2]
+                    
+                    if cross_method_only_9:
+                        pref1 = col1.split('_')[0] if '_' in col1 else col1
+                        pref2 = col2.split('_')[0] if '_' in col2 else col2
+                        if pref1 == pref2:
+                            continue
                     
                     if abs(corr_val) >= threshold:
                         G.add_edge(col1, col2, weight=abs(corr_val), corr=corr_val)
@@ -214,3 +224,4 @@ st.session_state.safe_cb_b_9 = st.session_state.cb_b_9
 st.session_state.safe_cb_m_9 = st.session_state.cb_m_9
 st.session_state.safe_cb_i_9 = st.session_state.cb_i_9
 st.session_state.safe_net_vars = st.session_state.net_vars
+st.session_state.safe_cross_method_9 = st.session_state.cross_method_9
