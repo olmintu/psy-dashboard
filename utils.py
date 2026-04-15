@@ -143,7 +143,9 @@ def show_help_dialog():
             
             st.markdown("#### 🌳 Иерархическая кластеризация (Дендрограммы)")
             st.markdown("Позволяет визуально оценить естественные группировки (деревья) в данных. Ствол дерева делится на крупные ветки — это и есть основные типажи в вашей выборке.")
-            
+            st.markdown("""* **🔎 Интерактивные профили:** Под дендрограммой строятся динамические списки. Наведите курсор на шкалу в одной группе, и она подсветится во всех остальных. Это позволяет мгновенно сравнить ранг (место) показателя в разных типажах.
+* **📥 Экспорт в HTML:** Вы можете скачать этот интерактивный виджет как отдельный файл. Он сохранит всю логику подсветки и его можно использовать для презентаций или отправки коллегам.
+* **📊 Статистика различий:** При скачивании Excel-версии профилей система автоматически рассчитывает p-value (ANOVA) для каждой шкалы, показывая, какие именно признаки внесли самый большой вклад в разделение людей.""")
             st.markdown("#### 🎯 K-Means (Авто-выбор)")
             st.markdown("""
             * Выберите шкалы. Алгоритм сам рассчитает метрику Силуэта и предложит **оптимальное количество кластеров**.
@@ -416,6 +418,9 @@ def render_sidebar():
     all_kmns = sorted(df_raw['Is_KMNS'].dropna().astype(str).unique().tolist()) if 'Is_KMNS' in df_raw.columns else []
     if 'f_kmns' not in st.session_state: st.session_state['f_kmns'] = all_kmns
 
+    all_fast = sorted(df_raw['Fast_Clicker'].dropna().astype(str).unique().tolist()) if 'Fast_Clicker' in df_raw.columns else []
+    if 'f_fast' not in st.session_state: st.session_state['f_fast'] = []
+
     extra_cols = {
         'KMNS_Name': 'Конкретный народ (КМНС)', 'Family': 'Семейное положение',
         'Children': 'Наличие детей', 'University': 'Название ВУЗа',
@@ -437,6 +442,13 @@ def render_sidebar():
             sel_work = st.multiselect("Работа", all_work, default=st.session_state['f_work']) if all_work else []
             sel_edu = st.multiselect("Образование", all_edu, default=st.session_state['f_edu']) if all_edu else []
             sel_kmns = st.multiselect("Относится к КМНС?", all_kmns, default=st.session_state['f_kmns']) if all_kmns else []
+
+            sel_fast = st.multiselect(
+                "Анти-фрод (Fast Clicker)", 
+                all_fast, 
+                default=st.session_state['f_fast'], 
+                help="Оставьте пустым, чтобы показать всех. Выберите 'No', чтобы оставить только надежные ответы."
+            ) if all_fast else []
 
             with st.expander("Дополнительные фильтры", expanded=False):
                 sel_extra = {}
@@ -460,6 +472,7 @@ def render_sidebar():
             st.session_state['f_work'] = sel_work
             st.session_state['f_edu'] = sel_edu
             st.session_state['f_kmns'] = sel_kmns
+            st.session_state['f_fast'] = sel_fast
             st.session_state['f_extra'] = sel_extra
 
         # ==========================================
@@ -476,6 +489,8 @@ def render_sidebar():
             mask &= df_raw['Edu_Status'].astype(str).isin(st.session_state['f_edu'])
         if 'Is_KMNS' in df_raw.columns and st.session_state['f_kmns']: 
             mask &= df_raw['Is_KMNS'].astype(str).isin(st.session_state['f_kmns'])
+        if 'Fast_Clicker' in df_raw.columns and st.session_state['f_fast']: 
+            mask &= df_raw['Fast_Clicker'].astype(str).isin(st.session_state['f_fast'])
         
         for col, selected in st.session_state['f_extra'].items():
             if col in df_raw.columns and selected:

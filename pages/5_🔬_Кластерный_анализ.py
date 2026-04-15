@@ -9,7 +9,7 @@ from scipy.cluster.hierarchy import dendrogram, linkage
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from utils import render_sidebar, get_name, run_clustering_analysis
+from utils import render_sidebar, get_name, run_clustering_analysis, smart_compare_groups
 
 st.set_page_config(page_title="Кластерный анализ", layout="wide", page_icon="🔬")
 
@@ -75,6 +75,10 @@ with subtab_hc:
             Z_vars = linkage(X_scaled.T, method='ward')
             fig_v, ax_v = plt.subplots(figsize=(10, 6))
             dendrogram(Z_vars, labels=var_names, leaf_rotation=45, leaf_font_size=10, ax=ax_v)
+            
+            # --- : Выравниваем текст по правому краю ---
+            ax_v.set_xticklabels(ax_v.get_xticklabels(), rotation=90, ha='right', fontsize=8)
+            
             plt.title("Дендрограмма (Шкалы)")
             plt.tight_layout()
             st.pyplot(fig_v)
@@ -82,21 +86,166 @@ with subtab_hc:
         elif hc_plot_type == "Кластеризация наблюдений (Респондентов)":
             st.markdown("**Дендрограмма наблюдений:** показывает, как респонденты объединяются в группы.")
             Z_obs = linkage(X_scaled, method='ward')
-            fig_o, ax_o = plt.subplots(figsize=(12, 7))
+            
+            # ---  Галочка для показа полного дерева ---
+            show_full_tree = False
             if len(obs_names) > 50:
+                show_full_tree = st.checkbox("🌳 Показать полное дерево (все респонденты без сжатия)", value=False)
+            
+            fig_o, ax_o = plt.subplots(figsize=(12, 7))
+            
+            # Логика отрисовки в зависимости от галочки
+            if len(obs_names) > 50 and not show_full_tree:
                 dendrogram(Z_obs, labels=obs_names, leaf_rotation=90, leaf_font_size=8, ax=ax_o, truncate_mode='lastp', p=30, show_contracted=True)
                 plt.title("Дендрограмма (Респонденты) - Показаны 30 верхних узловых групп")
             else:
                 dendrogram(Z_obs, labels=obs_names, leaf_rotation=90, leaf_font_size=8, ax=ax_o)
                 plt.title("Дендрограмма (Респонденты)")
+                
             plt.tight_layout()
             st.pyplot(fig_o)
 
-        elif hc_plot_type == "Тепловая карта + Деревья (Clustergram)":
-            st.markdown("**Clustergram:** объединяет обе дендрограммы и показывает выраженность признаков цветом.")
-            df_cm = pd.DataFrame(X_scaled, index=obs_names, columns=var_names)
-            fig_cm = sns.clustermap(df_cm, method='ward', cmap='coolwarm', figsize=(10, 10), yticklabels=True if len(obs_names) <= 50 else False, xticklabels=True)
-            st.pyplot(fig_cm.figure)
+            # --- Продвинутая аналитика кластеров ---
+            from scipy.cluster.hierarchy import fcluster
+            import io
+            
+            st.markdown("---")
+            st.subheader("📊 Характеристики выделенных групп")
+            
+            # 1. Настройка "разреза" дерева
+            n_hc_clusters = st.slider("Количество групп (веток) для анализа:", min_value=2, max_value=15, value=3, step=1)
+            cluster_labels = fcluster(Z_obs, t=n_hc_clusters, criterion='maxclust')
+            
+            # 2. Подготовка данных для анализа
+            df_hc_res = pd.DataFrame({'Респондент': obs_names, 'Cluster_ID': cluster_labels})
+            df_with_clusters = df_hc.copy()
+            df_with_clusters['Cluster_Group'] = cluster_labels
+            
+            # 3. Расчет средних и статистической значимости (ANOVA)
+            summary_list = []
+            for col in hc_features:
+                group_means = df_with_clusters.groupby('Cluster_Group')[col].mean()
+                # Вызываем вашу математическую функцию из 3-й вкладки
+                _, p_val = smart_compare_groups(df_with_clusters, 'Cluster_Group', col)
+                
+                row = {'Показатель': get_name(col), 'p-value (значимость)': p_val}
+                for g_id, m_val in group_means.items():
+                    row[f'Группа {g_id}'] = round(m_val, 2)
+                summary_list.append(row)
+                
+            df_summary = pd.DataFrame(summary_list)
+            
+            # 4. Кнопка скачивания Excel
+            buffer_cl = io.BytesIO()
+            df_summary.to_excel(buffer_cl, index=False)
+            st.download_button(
+                "📥 Скачать профили групп и p-value (Excel)", 
+                buffer_cl.getvalue(), 
+                "cluster_profiles.xlsx", 
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            # 5. ИНТЕРАКТИВНЫЕ СПИСКИ С ПОДСВЕТКОЙ (HTML/JS)
+            import streamlit.components.v1 as components
+
+            st.info("💡 Ниже представлены профили кластеров. **Наведите курсор на любую шкалу**, чтобы увидеть её позицию в других группах!")
+
+            # Отрисовка шапок (стандартный Streamlit)
+            cols_groups = st.columns(n_hc_clusters)
+            for i in range(1, n_hc_clusters + 1):
+                with cols_groups[i - 1]:
+                    st.success(f"**Группа {i}**")
+                    group_members = df_hc_res[df_hc_res['Cluster_ID'] == i]['Респондент'].tolist()
+                    with st.expander(f"👥 Состав ({len(group_members)} чел.)"):
+                        st.caption(", ".join(group_members))
+
+            # --- ГЕНЕРАЦИЯ ПОЛНОЦЕННОГО HTML-ОТЧЕТА ---
+            # Стили (те же, что и раньше + обертка для файла)
+            css_style = """
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #fafafa; }
+                h2 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+                .comparator { display: flex; gap: 15px; flex-wrap: wrap; }
+                .col { flex: 1; min-width: 250px; background: #fff; border-radius: 8px; padding: 15px; border: 1px solid #ddd; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+                .col-title { font-weight: bold; margin-bottom: 15px; color: #2980b9; font-size: 16px; text-align: center; border-bottom: 1px solid #eee; padding-bottom: 8px;}
+                .item { padding: 10px; margin-bottom: 6px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; transition: all 0.2s ease; background: #fdfdfd; border: 1px solid #f0f0f0; }
+                .item:hover { background-color: #fff9db; border-color: #ffe066; }
+                .item.highlight { background-color: #fff3cd !important; border-color: #ffe69c !important; transform: scale(1.02); box-shadow: 0 4px 8px rgba(0,0,0,0.1); z-index: 10; position: relative;}
+                .scale-name { color: #34495e; text-align: right; line-height: 1.2; font-size: 12px; margin-left: 10px;}
+                .scale-val { font-weight: bold; color: #2980b9; font-size: 14px; min-width: 45px;}
+                .legend { margin-top: 20px; font-size: 12px; color: #7f8c8d; font-style: italic; }
+            </style>
+            """
+
+            # Сама структура списков
+            html_body = f'<div class="comparator">'
+            for i in range(1, n_hc_clusters + 1):
+                group_col_name = f'Группа {i}'
+                sorted_group = df_summary[['Показатель', group_col_name]].sort_values(by=group_col_name, ascending=False)
+                
+                html_body += f'<div class="col"><div class="col-title">Группа {i}</div>'
+                for _, row in sorted_group.iterrows():
+                    scale_name = row['Показатель']
+                    val = row[group_col_name]
+                    safe_id = "".join(c if c.isalnum() else "_" for c in scale_name)
+                    html_body += f'''
+                        <div class="item" data-scale="{safe_id}">
+                            <span class="scale-val">{val:.2f}</span>
+                            <span class="scale-name">{scale_name}</span>
+                        </div>
+                    '''
+                html_body += '</div>'
+            html_body += '</div>'
+
+            # JavaScript
+            js_script = """
+            <script>
+                const items = document.querySelectorAll('.item');
+                items.forEach(item => {
+                    item.addEventListener('mouseenter', () => {
+                        const target = item.getAttribute('data-scale');
+                        document.querySelectorAll(`.item[data-scale="${target}"]`).forEach(el => el.classList.add('highlight'));
+                    });
+                    item.addEventListener('mouseleave', () => {
+                        const target = item.getAttribute('data-scale');
+                        document.querySelectorAll(`.item[data-scale="${target}"]`).forEach(el => el.classList.remove('highlight'));
+                    });
+                });
+            </script>
+            """
+
+            # Собираем всё в одну строку для отображения в приложении
+            full_html_snippet = css_style + html_body + js_script
+            
+            # Собираем полноценный файл для скачивания (с тегами html/body)
+            standalone_html = f"""
+            <!DOCTYPE html>
+            <html lang="ru">
+            <head>
+                <meta charset="UTF-8">
+                <title>Интерактивный профиль кластеров</title>
+                {css_style}
+            </head>
+            <body>
+                <h2>📊 Психологические профили выделенных групп</h2>
+                <p class="legend">Подсказка: наведите курсор на любую шкалу, чтобы подсветить её во всех группах.</p>
+                {html_body}
+                {js_script}
+            </body>
+            </html>
+            """
+
+            # Выводим в интерфейс
+            components.html(full_html_snippet, height=max(500, len(hc_features) * 42), scrolling=True)
+
+            # Кнопка скачивания HTML
+            st.download_button(
+                label="🌐 Скачать этот интерактивный отчет (HTML)",
+                data=standalone_html,
+                file_name="interactive_clusters.html",
+                mime="text/html",
+                help="Вы скачаете файл, который сохранит всю магию подсветки. Его можно открыть в любом браузере."
+            )
 
 # ---------------------------------------------------------
 # 2. K-MEANS С АВТО-ВЫБОРОМ

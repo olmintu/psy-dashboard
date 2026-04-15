@@ -5,7 +5,7 @@ st.set_page_config(page_title="Анализ Психодиагностики Pro
 
 # Функция для сброса старых фильтров при загрузке нового файла
 def reset_filters():
-    keys_to_clear = ['f_gender', 'f_age', 'f_work', 'f_edu', 'f_kmns', 'f_extra']
+    keys_to_clear = ['f_gender', 'f_age', 'f_work', 'f_edu', 'f_kmns','f_fast', 'f_extra']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
