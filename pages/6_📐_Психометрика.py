@@ -6,6 +6,7 @@ import pingouin as pg
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from utils import render_sidebar, get_name
+from factor_analyzer import FactorAnalyzer
 
 st.set_page_config(page_title="Психометрика", layout="wide", page_icon="📐")
 
@@ -90,34 +91,70 @@ with subtab_fa:
         df_fa = df[fa_cols].dropna()
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(df_fa)
-        
-        pca_full = PCA()
-        pca_full.fit(data_scaled)
-        
-        col_fa1, col_fa2 = st.columns([1, 2])
-        with col_fa1:
-            eigenvalues = pca_full.explained_variance_
-            kaiser_factors = sum(eigenvalues > 1.0)
-            st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors}")
-            n_factors = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors)))
-        
-        with col_fa2:
-            fig_scree = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=eigenvalues, mode='lines+markers', name='Собственные значения'))
-            fig_scree.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
-            fig_scree.update_layout(title="График 'Каменистой осыпи'", xaxis_title="Номер компоненты", yaxis_title="Собственное значение (Eigenvalue)", height=300)
-            st.plotly_chart(fig_scree, use_container_width=True)
-
-        pca_final = PCA(n_components=n_factors)
-        pca_final.fit(data_scaled)
-        loadings = pca_final.components_.T * np.sqrt(pca_final.explained_variance_)
-        
         translated_fa_cols = [get_name(c) for c in fa_cols]
-        factor_names = [f"Фактор {i+1} ({pca_final.explained_variance_ratio_[i]*100:.1f}%)" for i in range(n_factors)]
         
-        fig_loadings = go.Figure(data=go.Heatmap(z=loadings, x=factor_names, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Фактор: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
-        fig_loadings.update_layout(title="Матрица факторных нагрузок (чем ближе к 1 или -1, тем сильнее связь)", height=max(400, len(fa_cols) * 35))
-        st.plotly_chart(fig_loadings, use_container_width=True)
-        st.caption("🔍 **Как читать матрицу:** Смотрите на значения по модулю > 0.4. Они показывают, какие оригинальные шкалы 'вошли' в состав нового скрытого фактора.")
+        # Создаем внутренние вкладки для сравнения методов
+        fa_tab_pca, fa_tab_efa = st.tabs(["PCA (Главные компоненты)", "EFA (Факторный анализ)"])
+        
+        # --- БЛОК 1: PCA ---
+        with fa_tab_pca:
+            pca_full = PCA()
+            pca_full.fit(data_scaled)
+            
+            col_fa1, col_fa2 = st.columns([1, 2])
+            with col_fa1:
+                eigenvalues = pca_full.explained_variance_
+                kaiser_factors = sum(eigenvalues > 1.0)
+                st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors}")
+                n_factors = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors)), key="pca_n")
+            
+            with col_fa2:
+                fig_scree = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=eigenvalues, mode='lines+markers', name='Собственные значения'))
+                fig_scree.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
+                fig_scree.update_layout(title="График 'Каменистой осыпи' (PCA)", xaxis_title="Номер компоненты", yaxis_title="Собственное значение", height=300)
+                st.plotly_chart(fig_scree, use_container_width=True)
+
+            pca_final = PCA(n_components=n_factors)
+            pca_final.fit(data_scaled)
+            loadings = pca_final.components_.T * np.sqrt(pca_final.explained_variance_)
+            
+            factor_names = [f"Компонента {i+1} ({pca_final.explained_variance_ratio_[i]*100:.1f}%)" for i in range(n_factors)]
+            
+            fig_loadings = go.Figure(data=go.Heatmap(z=loadings, x=factor_names, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Компонента: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
+            fig_loadings.update_layout(title="Матрица нагрузок PCA", height=max(400, len(fa_cols) * 35))
+            st.plotly_chart(fig_loadings, use_container_width=True)
+
+        # --- БЛОК 2: EFA ---
+        with fa_tab_efa:
+            # Инициализируем EFA без вращения для получения собственных значений
+            efa_full = FactorAnalyzer(n_factors=len(fa_cols), rotation=None)
+            efa_full.fit(data_scaled)
+            ev, v = efa_full.get_eigenvalues()
+            
+            col_efa1, col_efa2 = st.columns([1, 2])
+            with col_efa1:
+                kaiser_factors_efa = sum(ev > 1.0)
+                st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors_efa}")
+                n_factors_efa = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors_efa)), key="efa_n")
+                
+            with col_efa2:
+                fig_scree_efa = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=ev, mode='lines+markers', name='Собственные значения'))
+                fig_scree_efa.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
+                fig_scree_efa.update_layout(title="График 'Каменистой осыпи' (EFA)", xaxis_title="Номер фактора", yaxis_title="Собственное значение", height=300)
+                st.plotly_chart(fig_scree_efa, use_container_width=True)
+
+            # Финальная модель EFA с вращением Varimax
+            efa_final = FactorAnalyzer(n_factors=n_factors_efa, rotation='varimax')
+            efa_final.fit(data_scaled)
+            loadings_efa = efa_final.loadings_
+            
+            factor_names_efa = [f"Фактор {i+1}" for i in range(n_factors_efa)]
+            
+            fig_loadings_efa = go.Figure(data=go.Heatmap(z=loadings_efa, x=factor_names_efa, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings_efa, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Фактор: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
+            fig_loadings_efa.update_layout(title="Матрица факторных нагрузок EFA (Вращение: Varimax)", height=max(400, len(fa_cols) * 35))
+            st.plotly_chart(fig_loadings_efa, use_container_width=True)
+            st.caption("🔍 **Вращение Varimax:** максимизирует дисперсию нагрузок. Это делает факторы 'чище', заставляя каждую шкалу сильно коррелировать только с одним фактором, что упрощает психологическую интерпретацию.")
+
     else:
         st.info("Для факторного анализа требуется минимум 3 шкалы.")
 
