@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from utils import render_sidebar, get_name
 from factor_analyzer import FactorAnalyzer
+from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
 
 st.set_page_config(page_title="Психометрика", layout="wide", page_icon="📐")
 
@@ -92,7 +93,29 @@ with subtab_fa:
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(df_fa)
         translated_fa_cols = [get_name(c) for c in fa_cols]
-        
+        # --- АКАДЕМИЧЕСКАЯ ПРОВЕРКА ДАННЫХ (SPSS-style) ---
+        st.markdown("##### 🔬 Диагностика применимости данных")
+        try:
+            # Тест Бартлетта
+            chi_square_value, p_value = calculate_bartlett_sphericity(df_fa)
+            # KMO
+            kmo_all, kmo_model = calculate_kmo(df_fa)
+            
+            col_diag1, col_diag2 = st.columns(2)
+            with col_diag1:
+                if kmo_model >= 0.8: kmo_status = "🟢 Отлично"
+                elif kmo_model >= 0.6: kmo_status = "🟡 Приемлемо"
+                else: kmo_status = "🔴 Неадекватно"
+                st.metric("Мера адекватности KMO", f"{kmo_model:.3f}", kmo_status)
+                st.caption("Показывает долю дисперсии, которая может быть вызвана скрытыми факторами (норма > 0.6).")
+                
+            with col_diag2:
+                bartlett_status = "🟢 Значимо" if p_value < 0.05 else "🔴 Незначимо"
+                st.metric("Критерий Бартлетта (p-value)", f"{p_value:.4f}", bartlett_status)
+                st.caption("Доказывает, что шкалы коррелируют между собой и анализ имеет смысл (норма < 0.05).")
+        except Exception as e:
+            st.warning(f"⚠️ Невозможно рассчитать KMO/Бартлетта. Возможно, данных слишком мало или шкалы дублируют друг друга. Ошибка: {e}")
+        st.divider()
         # Создаем внутренние вкладки для сравнения методов
         fa_tab_pca, fa_tab_efa = st.tabs(["PCA (Главные компоненты)", "EFA (Факторный анализ)"])
         
@@ -143,17 +166,85 @@ with subtab_fa:
                 fig_scree_efa.update_layout(title="График 'Каменистой осыпи' (EFA)", xaxis_title="Номер фактора", yaxis_title="Собственное значение", height=300)
                 st.plotly_chart(fig_scree_efa, use_container_width=True)
 
-            # Финальная модель EFA с вращением Varimax
-            efa_final = FactorAnalyzer(n_factors=n_factors_efa, rotation='varimax')
+            # --- РАСШИРЕННЫЕ НАСТРОЙКИ (SPSS-style) ---
+            with st.expander("⚙️ Расширенные настройки EFA (SPSS-style)"):
+                st.markdown("Используйте эти настройки для тонкой калибровки, если этого требует методология исследования.")
+                col_opt1, col_opt2 = st.columns(2)
+                with col_opt1:
+                    efa_method = st.selectbox(
+                        "Метод извлечения факторов:",
+                        options=["minres", "ml", "principal"],
+                        format_func=lambda x: {
+                            "minres": "Minres (Минимум остатков - Рекомендуется)", 
+                            "ml": "Maximum Likelihood (Макс. правдоподобие)", 
+                            "principal": "Principal Axis (Главные оси)"
+                        }[x],
+                        help="Minres — современный стандарт EFA. ML хорош для нормально распределенных данных. Principal Axis — классика из старых версий SPSS."
+                    )
+                with col_opt2:
+                    efa_rotation = st.selectbox(
+                        "Метод вращения:",
+                        options=["varimax", "promax", "oblimin", None],
+                        format_func=lambda x: {
+                            "varimax": "Varimax (Ортогональное - факторы независимы)", 
+                            "promax": "Promax (Косоугольное - факторы связаны)", 
+                            "oblimin": "Oblimin (Косоугольное)", 
+                            None: "Без вращения"
+                        }[x],
+                        help="Varimax делает структуру максимально четкой. Promax и Oblimin разрешают факторам коррелировать (что часто бывает в психологии)."
+                    )
+
+            # 1. Создаем словарь с описаниями, чтобы не загромождать основной код
+            rotation_info = {
+                "varimax": {
+                    "name": "Varimax",
+                    "desc": "🔍 **Вращение Varimax:** максимизирует дисперсию нагрузок. Это делает факторы 'чище', заставляя каждую шкалу сильно коррелировать только с одним фактором, что упрощает психологическую интерпретацию."
+                },
+                "promax": {
+                    "name": "Promax",
+                    "desc": "🔍 **Вращение Promax:** косоугольное вращение. Позволяет факторам коррелировать между собой. Это часто лучше отражает психологическую реальность, где черты личности редко бывают полностью независимыми."
+                },
+                "oblimin": {
+                    "name": "Oblimin",
+                    "desc": "🔍 **Вращение Oblimin:** косоугольное вращение. Гибкий метод для выявления сложной структуры взаимосвязей между факторами."
+                },
+                None: {
+                    "name": "Без вращения",
+                    "desc": "⚠️ **Без вращения:** отображается исходная структура. Факторы обычно сложнее интерпретировать, так как шкалы могут иметь высокие нагрузки сразу на несколько факторов."
+                }
+            }
+
+            # 2. Финальная модель EFA с выбранными настройками
+            efa_final = FactorAnalyzer(n_factors=n_factors_efa, rotation=efa_rotation, method=efa_method)
             efa_final.fit(data_scaled)
             loadings_efa = efa_final.loadings_
             
             factor_names_efa = [f"Фактор {i+1}" for i in range(n_factors_efa)]
             
-            fig_loadings_efa = go.Figure(data=go.Heatmap(z=loadings_efa, x=factor_names_efa, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings_efa, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Фактор: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
-            fig_loadings_efa.update_layout(title="Матрица факторных нагрузок EFA (Вращение: Varimax)", height=max(400, len(fa_cols) * 35))
+            # 3. Визуализация с динамическим заголовком
+            current_rotation_name = rotation_info[efa_rotation]["name"]
+            
+            fig_loadings_efa = go.Figure(data=go.Heatmap(
+                z=loadings_efa, 
+                x=factor_names_efa, 
+                y=translated_fa_cols, 
+                colorscale='RdBu_r', 
+                zmin=-1, 
+                zmax=1, 
+                text=np.round(loadings_efa, 2), 
+                texttemplate="%{text}", 
+                hovertemplate="Шкала: %{y}<br>Фактор: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"
+            ))
+            
+            fig_loadings_efa.update_layout(
+                title=f"Матрица факторных нагрузок EFA (Вращение: {current_rotation_name})", 
+                height=max(400, len(fa_cols) * 35)
+            )
+            
             st.plotly_chart(fig_loadings_efa, use_container_width=True)
-            st.caption("🔍 **Вращение Varimax:** максимизирует дисперсию нагрузок. Это делает факторы 'чище', заставляя каждую шкалу сильно коррелировать только с одним фактором, что упрощает психологическую интерпретацию.")
+            
+            # 4. Вывод динамического описания
+            st.caption(rotation_info[efa_rotation]["desc"])
 
     else:
         st.info("Для факторного анализа требуется минимум 3 шкалы.")
