@@ -15,7 +15,7 @@ st.header("Анализ методик")
 analysis_mode = st.radio("Режим анализа:", ["Сводный (Средние по отфильтрованной группе)", "Индивидуальный (Конкретный респондент)"], horizontal=True)
 
 if analysis_mode == "Индивидуальный (Конкретный респондент)":
-    respondent_list = df.apply(lambda x: f"{x.get('FIO', f'Строка {x.name}')} | Пол: {x.get('Gender', '?')} | Возраст: {x.get('Age', '?')}", axis=1)
+    respondent_list = df.apply(lambda x: f"[ID: {x.name}] {x.get('FIO', f'Строка {x.name}')} | Пол: {x.get('Gender', '?')} | Возраст: {x.get('Age', '?')}", axis=1)
     selected_id = st.selectbox("Выберите респондента:", respondent_list.index, format_func=lambda x: respondent_list[x])
     target_data = df.loc[[selected_id]] 
 else:

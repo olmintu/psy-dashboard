@@ -497,6 +497,33 @@ def render_sidebar():
                 mask &= df_raw[col].astype(str).isin(selected)
 
         df = df_raw[mask].copy()
+        
+        # ---  ФИЛЬТР ПО ID (ИНДЕКСАМ) ---
+        st.sidebar.divider()
+        id_filter_raw = st.sidebar.text_area(
+            "🎯 Фильтр по ID респондентов", 
+            placeholder="Например: 5, 12, 44",
+            help="Введите ID через запятую или пробел. Позволяет оставить только конкретную группу людей."
+        )
+
+        if id_filter_raw.strip():
+            try:
+                # Парсим строку: заменяем запятые на пробелы и разбиваем
+                target_ids = [int(x.strip()) for x in id_filter_raw.replace(',', ' ').split() if x.strip().isdigit()]
+                if target_ids:
+                    # Оставляем только те ID, которые реально есть в текущем (уже отфильтрованном) наборе
+                    existing_ids = [i for i in target_ids if i in df.index]
+                    if existing_ids:
+                        df = df.loc[existing_ids]
+                        # Сообщение об успехе выводим в сайдбаре
+                        st.sidebar.success(f"Найдено ID: {len(df)}")
+                    
+                    # Если ввели ID, которых нет в базе, предупреждаем
+                    if len(existing_ids) < len(target_ids):
+                        missing = set(target_ids) - set(existing_ids)
+                        st.sidebar.warning(f"ID не найдены: {list(missing)}")
+            except Exception as e:
+                st.sidebar.error(f"Ошибка в формате ID: {e}")
 
         st.markdown("---")
         st.metric("Выборка", f"{len(df)} чел.", delta=len(df)-len(df_raw))
