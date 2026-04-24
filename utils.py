@@ -23,7 +23,7 @@ def show_help_dialog():
     topics = [
         "📥 1. Загрузка и Фильтры", "📊 2. Обзор выборки", "🧩 3. Анализ методик",
         "🆚 4. Сравнение групп", "🔗 5. Корреляции", "🔬 6. Кластерный анализ",
-        "📐 7. Психометрика", "🔮 8. Поиск драйверов", "👽 9. Детектор аномалий", "🕸️ 10. Сетевой анализ"
+        "📐 7. Факторный анализ", "🔮 8. Поиск драйверов", "👽 9. Детектор аномалий", "🕸️ 10. Сетевой анализ"
     ]
     
     with menu_col:
@@ -98,17 +98,21 @@ def show_help_dialog():
             st.markdown("#### 💡 Авто-поиск всех различий (Сканер)")
             st.markdown("""
             1. Выберите **Группирующий признак** (например, Пол).
-            2. Нажмите **«Найти значимые различия»**.
-            3. **Результат:** Таблица покажет *только те шкалы*, по которым группы достоверно отличаются.
+            2. Настройте **уровень значимости** (α). По умолчанию 0.05 — стандарт в психологии.
+            3. Нажмите **«Начать сканирование»**.
+            4. **Результат:** таблица только тех шкал, по которым группы достоверно отличаются.
+               Отсортирована по силе эффекта (Cohen's d или η²).
+            5. **Скачайте полный отчёт** в Excel — в него попадают *все* шкалы, включая незначимые,
+               что удобно для отчёта по исследованию.
             """)
             
             st.markdown("#### Как читать результат:")
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("<h4 style='text-align: center; color: #27ae60;'>p < 0.05</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='text-align: center; color: #27ae60;'>p < α</h4>", unsafe_allow_html=True)
                 st.markdown("<p style='text-align: center;'><b>Различия есть.</b> Это не случайность.</p>", unsafe_allow_html=True)
             with c2:
-                st.markdown("<h4 style='text-align: center; color: #e74c3c;'>p > 0.05</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='text-align: center; color: #e74c3c;'>p > α</h4>", unsafe_allow_html=True)
                 st.markdown("<p style='text-align: center;'><b>Различий нет.</b> Группы статистически одинаковы.</p>", unsafe_allow_html=True)
 
         elif selected_topic == topics[4]:
@@ -139,44 +143,94 @@ def show_help_dialog():
 
         elif selected_topic == topics[5]:
             st.markdown("### 🔬 Вкладка 5: Кластерный анализ")
-            st.markdown("Разделение людей на схожие типажи с помощью машинного обучения.")
-            
+            st.markdown("Разделение людей на схожие типажи с помощью машинного обучения. "
+                        "Оба метода (иерархический и K-Means) теперь показывают **коэффициент силуэта** — "
+                        "индикатор качества разбиения от −1 до 1 (чем выше, тем чётче разделены группы).")
+
+            st.info("""
+            **📏 Как читать силуэт:**
+            🟢 **≥ 0.50** — сильная кластерная структура
+            🟡 **0.25–0.50** — умеренная структура
+            🟠 **0.15–0.25** — слабая (интерпретировать осторожно)
+            🔴 **< 0.15** — естественной структуры нет, разбиение только описательное
+            """)
+
             st.markdown("#### 🌳 Иерархическая кластеризация (Дендрограммы)")
-            st.markdown("Позволяет визуально оценить естественные группировки (деревья) в данных. Ствол дерева делится на крупные ветки — это и есть основные типажи в вашей выборке.")
-            st.markdown("""* **🔎 Интерактивные профили:** Под дендрограммой строятся динамические списки. Наведите курсор на шкалу в одной группе, и она подсветится во всех остальных. Это позволяет мгновенно сравнить ранг (место) показателя в разных типажах.
-* **📥 Экспорт в HTML:** Вы можете скачать этот интерактивный виджет как отдельный файл. Он сохранит всю логику подсветки и его можно использовать для презентаций или отправки коллегам.
-* **📊 Статистика различий:** При скачивании Excel-версии профилей система автоматически рассчитывает p-value (ANOVA) для каждой шкалы, показывая, какие именно признаки внесли самый большой вклад в разделение людей.""")
+            st.markdown("""Доступны три режима:
+
+* **Кластеризация шкал** — показывает, какие психологические шкалы ведут себя похоже.
+* **Кластеризация респондентов** — типажи людей; можно задать число веток ползунком и получить:
+  - Коэффициент силуэта для выбранного разбиения
+  - Профили групп с автоматическим расчётом p-value (тест выбирается автоматически)
+  - Боксплоты ключевых показателей ИПЛ по группам
+  - Интерактивный HTML-отчёт с подсветкой при наведении
+  - Скачивание Excel: отдельно профили+p-value, отдельно состав групп
+* **Clustergram** — тепловая карта «респонденты × шкалы» с дендрограммами по обеим осям.
+  Самый информативный формат: сразу видно, какие группы людей имеют какой профиль и по каким шкалам они различаются.""")
+
             st.markdown("#### 🎯 K-Means (Авто-выбор)")
             st.markdown("""
-            * Выберите шкалы. Алгоритм сам рассчитает метрику Силуэта и предложит **оптимальное количество кластеров**.
-            * Радарные диаграммы (паутинки) покажут психологический профиль каждого кластера (чем отличается Группа 1 от Группы 2).
+            * Выберите шкалы — алгоритм рассчитает силуэт для k от 2 до 10 и предложит **оптимальное количество кластеров**.
+            * **Числовой силуэт** для выбранного k с цветовой интерпретацией качества.
+            * Карта кластеров (PCA) и радар профилей.
+            * **Таблица средних значений с p-value** — показывает, по каким именно шкалам кластеры значимо различаются.
+            * **Боксплоты ИПЛ** с разбивкой по кластерам.
+            * Скачивание Excel — профили и состав групп (с ID, ФИО, Полом и другими контекстными колонками).
             """)
 
         elif selected_topic == topics[6]:
-            st.markdown("### 📐 Вкладка 6: Психометрика")
-            st.markdown("Проверка надежности и факторной структуры самого теста.")
-            
-            st.markdown("#### 1. Альфа Кронбаха (Внутренняя согласованность)")
-            st.markdown("Метрика надежности. Показывает, измеряют ли выбранные шкалы единый конструкт.")
+            st.markdown("### 📐 Вкладка 6: Факторный анализ и надёжность")
+            st.markdown("Поиск латентной структуры данных + проверка согласованности шкал.")
+
+            st.markdown("#### 🧬 1. Факторная структура (главное)")
+            st.markdown("""
+            **Три слоя проверки** перед запуском FA:
+
+            1. **📏 Размер выборки vs переменные** — соотношение n/vars (правило не менее 5:1 для надёжных результатов).
+            2. **🔬 KMO** — мера адекватности данных (норма > 0.6). Низкое KMO = у шкал нет общей дисперсии для факторного анализа.
+            3. **🔬 Критерий Бартлетта** — p-value должен быть < 0.05, иначе шкалы не коррелируют и факторов искать бессмысленно.
+
+            Все три проверки должны пройти, чтобы факторный анализ имел смысл.
+
+            **Внутренние вкладки:**
+            * **PCA** — быстрая первичная компоновка; scree plot + критерий Кайзера (λ > 1) подскажут число факторов.
+            * **EFA** — полноценный факторный анализ с выбором метода извлечения (Minres/ML/Principal Axis) и вращения (Varimax/Promax/Oblimin).
+
+            Ищите нагрузки **|λ| ≥ 0.4** — они показывают, какие шкалы вошли в каждый латентный фактор.
+            """)
+
+            st.markdown("#### 🔗 2. Альфа Кронбаха")
+            st.markdown("Проверка внутренней согласованности набора шкал.")
             st.progress(75)
-            st.caption("Норма: α > 0.7. Если показатель высокий, вы имеете право объединить эти шкалы в один суммарный индекс.")
-            
-            st.markdown("#### 2. Метод главных компонент (PCA)")
-            st.markdown("Сжимает все шкалы в 2-3 крупных латентных фактора и выводит таблицу «нагрузок». Смотрите на цифры **> 0.4** — они показывают, какие именно шкалы вошли в состав каждого укрупненного фактора.")
+            st.caption("Норма: α > 0.7. Если показатель высокий, вы имеете право объединить выбранные шкалы в один суммарный индекс.")
+            st.warning("⚠️ В дашборде загружены финальные баллы по шкалам, а не ответы на отдельные вопросы. "
+                       "Поэтому α здесь измеряет **макро-согласованность** (насколько шкалы ведут себя как части одного конструкта), "
+                       "а не классическую надёжность отдельных пунктов.")
 
         elif selected_topic == topics[7]:
             st.markdown("### 🔮 Вкладка 7: Поиск драйверов (ИИ)")
             st.markdown("Определяет, какие факторы сильнее всего влияют на выбранный целевой показатель с помощью алгоритма Random Forest.")
-            
+
             st.markdown("#### 🛠️ Инструкция:")
             st.markdown("""
             1. Выберите **Целевой показатель** (например, Общий балл ИПЛ).
-            2. Выберите **Факторы влияния** (например, все шкалы Мильмана).
-            3. Нажмите **«Найти ключевые драйверы»**.
+            2. Выберите **метод корреляции** для определения направления влияния:
+               * **Spearman** — ранговая корреляция (по умолчанию). Работает при любых распределениях и устойчива к выбросам. Рекомендуется для психологических данных.
+               * **Pearson** — линейная корреляция. Предполагает нормальное распределение и чувствительна к выбросам.
+            3. Выберите **Факторы влияния** (например, все шкалы Мильмана).
+            4. Нажмите **«Найти ключевые драйверы»**.
             """)
-            
+
             st.info("📈 **Катализатор:** Фактор повышает целевой показатель.\n📉 **Блокатор:** Фактор снижает целевой показатель.")
-            
+
+            st.markdown("#### 🔬 Подробная таблица: сравнение Spearman и Pearson")
+            st.markdown("""
+            В expander «Подробная таблица» показаны оба коэффициента рядом. Если у какой-то шкалы
+            Spearman и Pearson дают **противоположные знаки** — строка подсвечивается жёлтым.
+            Это сигнал о **нелинейной связи** или **сильном влиянии выбросов** — значит, с такой
+            шкалой нужно работать отдельно, смотреть её скаттер и думать, что именно происходит.
+            """)
+
             st.markdown("#### 🎛️ Симулятор «Что-если» (Внизу страницы)")
             st.markdown("Двигайте ползунки найденных факторов (например, искусственно поднимите 'Комфорт') и нажимайте «Пересчитать», чтобы увидеть на спидометре прогноз изменения целевого показателя.")
 
@@ -245,31 +299,269 @@ SCALE_NAMES_RU = {
     'IPL_Type_PD': 'ИПЛ: Позитивно-дифференцированный (ПД)', 'IPL_Type_NG': 'ИПЛ: Негативно-генерализованный (НГ)',
     'IPL_Type_IP': 'ИПЛ: Инициативно-преобразовательный (ИП)', 'IPL_Type_VP': 'ИПЛ: Вынужденно-приспособительный (ВП)',
     'IPL_Level_Nature': 'ИПЛ: Природный уровень', 'IPL_Level_Social': 'ИПЛ: Социальный уровень',
-    'IPL_Level_Culture': 'ИПЛ: Культурный уровень', 'IPL_Level_Life': 'ИПЛ: Уровень жизни'
+    'IPL_Level_Culture': 'ИПЛ: Культурный уровень', 'IPL_Level_Life': 'ИПЛ: Уровень жизни',
+    # --- Производные типы и профили ---
+    'B_Altruistic_Level': 'Братусь: Уровень альтруист.', 'B_Existential_Level': 'Братусь: Уровень экзистенц.',
+    'B_Hedonistic_Level': 'Братусь: Уровень гедонист.', 'B_Self-realization_Level': 'Братусь: Уровень самореализ.',
+    'B_Status_Level': 'Братусь: Уровень статусных', 'B_Communicative_Level': 'Братусь: Уровень коммуник.',
+    'B_Family_Level': 'Братусь: Уровень семейных', 'B_Cognitive_Level': 'Братусь: Уровень когнитивных',
+    'M_Profile_Zh': 'Мильман: Мотив. профиль (жизнь)',
+    'M_Profile_Rb': 'Мильман: Мотив. профиль (работа)',
+    'M_Emo_Profile': 'Мильман: Эмоциональный профиль',
+    'IPL_OI_FN': 'ИПЛ: Стиль поиска (ОИ/ФН)',
+    'IPL_PD_NG': 'ИПЛ: Стиль оценки (ПД/НГ)',
+    'IPL_IP_VP': 'ИПЛ: Стиль действия (ИП/ВП)',
+    'IPL_Style': 'ИПЛ: Полный стиль',
+    'IPL_Structure': 'ИПЛ: Структура Г/А/П',
 }
 
 def get_name(col):
     return SCALE_NAMES_RU.get(col, col)
 
+
+# ==========================================
+# КАТЕГОРИАЛЬНЫЕ КОЛОНКИ С ТИПАМИ И ПРОФИЛЯМИ
+# ==========================================
+# Эти колонки — текстовые результаты производных вычислений (типы, профили).
+# Их НЕ нужно включать в числовые расчёты (.mean(), корреляции и т.д.).
+# Используется для исключения при фильтрации по префиксам 'B_', 'M_', 'IPL_'.
+
+DERIVED_CATEGORICAL_COLS = {
+    # Уровни Братуся (8)
+    'B_Altruistic_Level', 'B_Existential_Level', 'B_Hedonistic_Level',
+    'B_Self-realization_Level', 'B_Status_Level', 'B_Communicative_Level',
+    'B_Family_Level', 'B_Cognitive_Level',
+    # Мильман профили (3)
+    'M_Profile_Zh', 'M_Profile_Rb', 'M_Emo_Profile',
+    # ИПЛ стили и структура (5)
+    'IPL_OI_FN', 'IPL_PD_NG', 'IPL_IP_VP',
+    'IPL_Style', 'IPL_Structure',
+}
+
+
+def get_numeric_scales(columns, prefix=None):
+    """
+    Возвращает список числовых шкал, отфильтрованных по префиксу,
+    с исключением производных категориальных колонок.
+
+    Пример:
+        num_bratus = get_numeric_scales(df.columns, 'B_')
+        # Вернёт только 8 баллов Братуся, без _Level
+
+    Параметры:
+        columns: iterable с именами колонок (df.columns)
+        prefix: опциональный префикс ('B_', 'M_', 'IPL_'); None = без фильтра
+    """
+    result = [c for c in columns if c not in DERIVED_CATEGORICAL_COLS]
+    if prefix is not None:
+        result = [c for c in result if c.startswith(prefix)]
+    return result
+
+
 # ==========================================
 # ЯДРО АНАЛИТИКИ (ФУНКЦИИ РАСЧЕТА)
 # ==========================================
+
+# --- Функции расчёта производных типов и профилей ---
+# (дублируют логику process_survey.py для обратной совместимости со старыми файлами)
+
+def _bratus_level(score):
+    """Уровень категории смыслов: 3-9 Доминирует, 10-17 Нейтральный, 18-24 Игнорируется."""
+    if score is None or pd.isna(score):
+        return None
+    if 3 <= score <= 9:
+        return 'Доминирует'
+    if 10 <= score <= 17:
+        return 'Нейтральный'
+    if 18 <= score <= 24:
+        return 'Игнорируется'
+    return None
+
+
+def _milman_motivational_profile(p, k, s, o, d, dr, od):
+    """Мотивационный профиль по Мильману (Прогрессивный/Регрессивный/Импульсивный/Экспрессивный/Уплощённый/Неопределённый)."""
+    vals = [p, k, s, o, d, dr, od]
+    diff = (d + dr + od) - (p + k + s)
+    if diff >= 5:
+        return 'Прогрессивный'
+    if diff <= -5:
+        return 'Регрессивный'
+
+    peaks = 0
+    for i in range(len(vals)):
+        left = vals[i - 1] if i > 0 else None
+        right = vals[i + 1] if i < len(vals) - 1 else None
+        if i == 0:
+            if right is not None and vals[i] - right >= 4:
+                peaks += 1
+        elif i == len(vals) - 1:
+            if left is not None and vals[i] - left >= 4:
+                peaks += 1
+        else:
+            if vals[i] - left >= 2 and vals[i] - right >= 2:
+                peaks += 1
+    if peaks >= 3:
+        return 'Импульсивный'
+    if peaks == 2:
+        return 'Экспрессивный'
+    if max(vals) - min(vals) <= 3:
+        return 'Уплощённый'
+    return 'Неопределённый'
+
+
+def _milman_emotional_profile(e_st, e_ast, f_st, f_ast):
+    """Эмоциональный профиль: симметричная обработка равенств."""
+    emo_eq = (e_st == e_ast)
+    fru_eq = (f_st == f_ast)
+    if emo_eq and fru_eq:
+        return 'Не определён'
+    emo_sten = e_st > e_ast
+    fru_sten = f_st > f_ast
+    if emo_eq:
+        return 'Смешанный стенический' if fru_sten else 'Смешанный астенический'
+    if fru_eq:
+        return 'Смешанный астенический' if emo_sten else 'Смешанный стенический'
+    if emo_sten and fru_sten:
+        return 'Стенический'
+    if not emo_sten and not fru_sten:
+        return 'Астенический'
+    if not emo_sten and fru_sten:
+        return 'Смешанный стенический'
+    return 'Смешанный астенический'
+
+
+def _ipl_dimension(a, b, label_a, label_b):
+    """Одно измерение ИПЛ. При равенстве возвращает 'Неопределённый'."""
+    if a > b:
+        return label_a
+    if b > a:
+        return label_b
+    return 'Неопределённый'
+
+
+def _ipl_full_style(oi_fn, pd_ng, ip_vp):
+    """Полный стиль ИПЛ — склейка трёх измерений. При наличии неопределённого измерения — 'Неопределённый'."""
+    if 'Неопределённый' in (oi_fn, pd_ng, ip_vp):
+        return 'Неопределённый'
+    return f'{oi_fn}+{pd_ng}+{ip_vp}'
+
+
+def _ipl_structure(g, a, p):
+    """Структура Г/А/П в порядке возрастания. Равенства обозначаются '='."""
+    components = [('Г', g), ('А', a), ('П', p)]
+    components.sort(key=lambda x: x[1])
+    parts = [components[0][0]]
+    for i in range(1, 3):
+        sep = '=' if components[i][1] == components[i - 1][1] else '<'
+        parts.append(sep)
+        parts.append(components[i][0])
+    return ''.join(parts)
+
+
+def compute_derived_types(df):
+    """
+    Добавляет в DataFrame производные категориальные колонки с типами и профилями.
+    Вызывается из load_data автоматически, если эти колонки отсутствуют
+    (для обратной совместимости со старыми файлами FINAL_RESULTS).
+
+    Новые файлы, сформированные обновлённым process_survey.py, уже содержат
+    все эти колонки — в этом случае функция ничего не пересчитывает.
+    """
+    # --- Братусь: уровни по 8 категориям ---
+    bratus_cats = ['Altruistic', 'Existential', 'Hedonistic', 'Self-realization',
+                   'Status', 'Communicative', 'Family', 'Cognitive']
+    for cat in bratus_cats:
+        level_col = f'B_{cat}_Level'
+        score_col = f'B_{cat}'
+        if level_col not in df.columns and score_col in df.columns:
+            df[level_col] = df[score_col].apply(_bratus_level)
+
+    # --- Мильман: мотивационные профили (Ж и Рб) ---
+    m_scales = ['P', 'K', 'S', 'O', 'D', 'DR', 'OD']
+
+    def _has_milman_cols(sphere_suffix):
+        return all(f'M_{s}_{sphere_suffix}-id' in df.columns and f'M_{s}_{sphere_suffix}-re' in df.columns
+                   for s in m_scales)
+
+    if 'M_Profile_Zh' not in df.columns and _has_milman_cols('Zh'):
+        def _compute_zh(row):
+            vals = {s: row[f'M_{s}_Zh-id'] + row[f'M_{s}_Zh-re'] for s in m_scales}
+            return _milman_motivational_profile(
+                vals['P'], vals['K'], vals['S'], vals['O'],
+                vals['D'], vals['DR'], vals['OD'])
+        df['M_Profile_Zh'] = df.apply(_compute_zh, axis=1)
+
+    if 'M_Profile_Rb' not in df.columns and _has_milman_cols('Rb'):
+        def _compute_rb(row):
+            vals = {s: row[f'M_{s}_Rb-id'] + row[f'M_{s}_Rb-re'] for s in m_scales}
+            return _milman_motivational_profile(
+                vals['P'], vals['K'], vals['S'], vals['O'],
+                vals['D'], vals['DR'], vals['OD'])
+        df['M_Profile_Rb'] = df.apply(_compute_rb, axis=1)
+
+    # --- Мильман: эмоциональный профиль ---
+    emo_cols = ['M_Est', 'M_East', 'M_Fst', 'M_Fast']
+    if 'M_Emo_Profile' not in df.columns and all(c in df.columns for c in emo_cols):
+        df['M_Emo_Profile'] = df.apply(
+            lambda r: _milman_emotional_profile(r['M_Est'], r['M_East'], r['M_Fst'], r['M_Fast']),
+            axis=1)
+
+    # --- ИПЛ: три измерения ---
+    ipl_type_pairs = [
+        ('IPL_OI_FN', 'IPL_Type_OI', 'IPL_Type_FN', 'ОИ', 'ФН'),
+        ('IPL_PD_NG', 'IPL_Type_PD', 'IPL_Type_NG', 'ПД', 'НГ'),
+        ('IPL_IP_VP', 'IPL_Type_IP', 'IPL_Type_VP', 'ИП', 'ВП'),
+    ]
+    for target_col, col_a, col_b, label_a, label_b in ipl_type_pairs:
+        if target_col not in df.columns and col_a in df.columns and col_b in df.columns:
+            df[target_col] = df.apply(
+                lambda r: _ipl_dimension(r[col_a], r[col_b], label_a, label_b), axis=1)
+
+    # --- ИПЛ: полный стиль ---
+    if 'IPL_Style' not in df.columns and all(c in df.columns for c in ['IPL_OI_FN', 'IPL_PD_NG', 'IPL_IP_VP']):
+        df['IPL_Style'] = df.apply(
+            lambda r: _ipl_full_style(r['IPL_OI_FN'], r['IPL_PD_NG'], r['IPL_IP_VP']), axis=1)
+
+    # --- ИПЛ: структура Г/А/П ---
+    if 'IPL_Structure' not in df.columns and all(c in df.columns for c in ['IPL_G', 'IPL_A', 'IPL_P']):
+        df['IPL_Structure'] = df.apply(
+            lambda r: _ipl_structure(r['IPL_G'], r['IPL_A'], r['IPL_P']), axis=1)
+
+    return df
+
+
 @st.cache_data(ttl=3600)
 def load_data(file):
     try:
         df = pd.read_excel(file)
 
-        text_cols = df.select_dtypes(include=['object']).columns
+        # Колонки с производными типами/профилями НЕ трогаем .capitalize() —
+        # иначе значения вроде 'ОИ+ПД+ИП' превратятся в 'Ои+пд+ип',
+        # а 'Г<А<П' в 'Г<а<п'. Используем глобальную константу.
+
+        # В pandas 2.x текстовые колонки могут иметь dtype 'string' (StringDtype),
+        # а не 'object'. Включаем оба для совместимости.
+        try:
+            text_cols = df.select_dtypes(include=['object', 'string']).columns
+        except TypeError:
+            # На всякий случай fallback для старых версий pandas
+            text_cols = df.select_dtypes(include=['object']).columns
+
         for col in text_cols:
+            if col in DERIVED_CATEGORICAL_COLS:
+                continue  # не меняем регистр у категориальных типов
             df[col] = df[col].astype(str).str.strip().str.capitalize()
             df[col] = df[col].replace({'Nan': np.nan, 'None': np.nan})
-            
+
+        # Рассчитываем производные типы/профили, если их нет в файле
+        # (актуально для старых файлов FINAL_RESULTS, обработанных до обновления process_survey)
+        df = compute_derived_types(df)
+
         return df
     except Exception as e:
         st.error(f"Ошибка загрузки файла: {e}")
         return None
 
-@st.cache_data
 def get_descriptive_stats(df, columns):
     stats_list = []
     for col in columns:
@@ -292,11 +584,21 @@ def get_descriptive_stats(df, columns):
         })
     return pd.DataFrame(stats_list)
 
-@st.cache_data
 def smart_compare_groups(df, group_col, metric_col):
+    """
+    Выбирает подходящий тест сравнения групп на основе нормальности.
+
+    Returns
+    -------
+    result_df : pd.DataFrame | None
+        Таблица с полями Метрика/Тест/p-value/Эффект (для отображения).
+    p_val : float | str
+        Числовое p-value, либо строка с описанием ошибки.
+    """
     clean_df = df[[group_col, metric_col]].dropna()
     groups = clean_df[group_col].unique()
-    if len(groups) < 2: return None, "Меньше 2 групп"
+    if len(groups) < 2:
+        return None, "Меньше 2 групп"
     try:
         is_normal = True
         for g in groups:
@@ -306,43 +608,156 @@ def smart_compare_groups(df, group_col, metric_col):
                     is_normal = False
                     break
         if len(groups) == 2:
-            g1, g2 = clean_df[clean_df[group_col] == groups[0]][metric_col], clean_df[clean_df[group_col] == groups[1]][metric_col]
+            g1 = clean_df[clean_df[group_col] == groups[0]][metric_col]
+            g2 = clean_df[clean_df[group_col] == groups[1]][metric_col]
             if is_normal:
                 res = pg.ttest(g1, g2, correction=True)
-                test_name, p_val, eff_size, eff_label = "T-test (Welch)", res['p-val'].values[0], res['cohen-d'].values[0], "Cohen's d"
+                test_name, eff_label = "T-test (Welch)", "Cohen's d"
+                p_val, eff_size = res['p-val'].values[0], res['cohen-d'].values[0]
             else:
                 res = pg.mwu(g1, g2)
-                test_name, p_val, eff_size, eff_label = "Mann-Whitney U (Непараметрический)", res['p-val'].values[0], res['RBC'].values[0], "Rank-Biserial"
+                test_name, eff_label = "Mann-Whitney U (Непараметрический)", "Rank-Biserial"
+                p_val, eff_size = res['p-val'].values[0], res['RBC'].values[0]
         else:
             if is_normal:
                 res = pg.anova(data=clean_df, dv=metric_col, between=group_col)
-                test_name, p_val, eff_size, eff_label = "One-way ANOVA", res['p-unc'].values[0], res['np2'].values[0], "Eta-sq (η²)"
+                test_name, eff_label = "One-way ANOVA", "Eta-sq (η²)"
+                p_val, eff_size = res['p-unc'].values[0], res['np2'].values[0]
             else:
                 res = pg.kruskal(data=clean_df, dv=metric_col, between=group_col)
-                test_name, p_val, eff_size, eff_label = "Kruskal-Wallis (Непараметрический)", res['p-unc'].values[0], res['H'].values[0], "H-stat"
-        stars = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else ("*" if p_val < 0.05 else ""))
-        result_df = pd.DataFrame({"Метрика": [metric_col], "Тест": [test_name], "p-value": [f"{p_val:.4f} {stars}"], f"Эффект ({eff_label})": [f"{eff_size:.3f}"]})
-        return result_df, p_val
-    except Exception as e:
-        return None, str(e)
+                test_name, eff_label = "Kruskal-Wallis (Непараметрический)", "H-stat"
+                p_val, eff_size = res['p-unc'].values[0], res['H'].values[0]
 
-@st.cache_data
+        stars = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else ("*" if p_val < 0.05 else ""))
+        result_df = pd.DataFrame({
+            "Метрика": [metric_col],
+            "Тест": [test_name],
+            "p-value": [f"{p_val:.4f} {stars}"],
+            f"Эффект ({eff_label})": [f"{eff_size:.3f}"]
+        })
+        return result_df, p_val
+    except Exception:
+        return None, None
+
+
+def _compare_groups_raw(df, group_col, metric_col):
+    """
+    Внутренняя версия smart_compare_groups для массового сканирования.
+    Возвращает словарь с числовыми значениями теста или None при ошибке.
+    Используется run_auto_scan для агрегирования результатов.
+    """
+    clean_df = df[[group_col, metric_col]].dropna()
+    groups = clean_df[group_col].unique()
+    if len(groups) < 2:
+        return None
+    try:
+        is_normal = True
+        for g in groups:
+            g_data = clean_df[clean_df[group_col] == g][metric_col]
+            if len(g_data) >= 3:
+                if pg.normality(g_data)['pval'].values[0] < 0.05:
+                    is_normal = False
+                    break
+        if len(groups) == 2:
+            g1 = clean_df[clean_df[group_col] == groups[0]][metric_col]
+            g2 = clean_df[clean_df[group_col] == groups[1]][metric_col]
+            if is_normal:
+                res = pg.ttest(g1, g2, correction=True)
+                return {'p_val': float(res['p-val'].values[0]),
+                        'test': 'T-test (Welch)',
+                        'effect_size': float(res['cohen-d'].values[0]),
+                        'effect_label': "Cohen's d"}
+            res = pg.mwu(g1, g2)
+            return {'p_val': float(res['p-val'].values[0]),
+                    'test': 'Mann-Whitney U',
+                    'effect_size': float(res['RBC'].values[0]),
+                    'effect_label': 'Rank-Biserial'}
+        if is_normal:
+            res = pg.anova(data=clean_df, dv=metric_col, between=group_col)
+            return {'p_val': float(res['p-unc'].values[0]),
+                    'test': 'One-way ANOVA',
+                    'effect_size': float(res['np2'].values[0]),
+                    'effect_label': 'Eta-sq (η²)'}
+        res = pg.kruskal(data=clean_df, dv=metric_col, between=group_col)
+        return {'p_val': float(res['p-unc'].values[0]),
+                'test': 'Kruskal-Wallis',
+                'effect_size': float(res['H'].values[0]),
+                'effect_label': 'H-stat'}
+    except Exception:
+        return None
+
+
+def run_auto_scan(df, group_col, metric_cols, alpha=0.05):
+    """
+    Массовое сравнение групп по всем metric_cols с автоматическим выбором теста.
+    Устраняет дублирование логики тестирования: теперь страница 3 вызывает
+    эту функцию, а не копирует выбор тестов заново.
+
+    Returns
+    -------
+    pd.DataFrame
+        Колонки: Показатель, Колонка, Тест, p-value, Размер эффекта (с меткой),
+                 Значимость, _p_raw, _effect_raw.
+        Отсортирован по p-value (возрастание), только удачные расчёты.
+    """
+    rows = []
+    for col in metric_cols:
+        details = _compare_groups_raw(df, group_col, col)
+        if details is None:
+            continue
+        p_val = details['p_val']
+        stars = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else ("*" if p_val < alpha else ""))
+        rows.append({
+            'Показатель': get_name(col),
+            'Колонка': col,
+            'Тест': details['test'],
+            'p-value': round(p_val, 4),
+            f"Размер эффекта ({details['effect_label']})": round(details['effect_size'], 3),
+            'Значимость': stars or "н.з.",
+            '_p_raw': p_val,
+            '_effect_raw': details['effect_size'],
+        })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values('_p_raw').reset_index(drop=True)
+
+
 def run_clustering_analysis(df, cols, n_clusters):
+    """
+    Запускает K-Means кластеризацию.
+    Возвращает DataFrame с кластерами, PCA-координатами, силуэтом и оригинальными
+    демографическими/текстовыми колонками (если они есть в df).
+    """
+    from sklearn.metrics import silhouette_score
     data = df[cols].dropna()
-    if data.empty: return None
+    if data.empty or len(data) <= n_clusters:
+        return None, None
     scaler = StandardScaler()
     data_scaled = scaler.fit_transform(data)
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     clusters = kmeans.fit_predict(data_scaled)
     pca = PCA(n_components=2)
     components = pca.fit_transform(data_scaled)
+
+    # Силуэт для выбранного разбиения
+    try:
+        sil = silhouette_score(data_scaled, clusters)
+    except Exception:
+        sil = None
+
     res_df = data.copy()
     res_df['Cluster'] = clusters.astype(str)
     res_df['PC1'], res_df['PC2'] = components[:, 0], components[:, 1]
-    res_df = res_df.join(df[['Gender', 'Age']], how='left')
-    return res_df
 
-@st.cache_data
+    # Подтягиваем все контекстные колонки, которые есть в df и не использовались для кластеризации
+    context_cols = [c for c in ['FIO', 'Gender', 'Age', 'Course', 'Edu_Status',
+                                'Edu_Level', 'University', 'Speciality']
+                    if c in df.columns and c not in cols]
+    if context_cols:
+        res_df = res_df.join(df[context_cols], how='left')
+
+    return res_df, sil
+
 def calc_correlation_matrices(df_subset, method):
     cols = df_subset.columns
     r_matrix = df_subset.corr(method=method)
@@ -369,11 +784,13 @@ def init_session_state():
         try:
             import os
             if os.path.exists('TEST_RESULTS.xlsx'):
-                # Важно: вызываем загрузку напрямую из pandas или через вашу load_data
-                # Но без st.rerun(), так как это происходит в начале выполнения скрипта
-                st.session_state['df_raw'] = pd.read_excel('TEST_RESULTS.xlsx')
+                # Используем load_data для единообразной обработки текстовых полей
+                # (без load_data демо-данные и пользовательские данные обрабатывались
+                # по-разному, что могло приводить к расхождениям в фильтрах и тестах)
+                with open('TEST_RESULTS.xlsx', 'rb') as f:
+                    st.session_state['df_raw'] = load_data(f)
                 st.session_state['is_demo'] = True
-        except:
+        except Exception:
             pass
 def render_sidebar():
     """Функция отрисовки глобального бокового меню и фильтров с кэшированием между страницами"""
@@ -428,6 +845,31 @@ def render_sidebar():
     }
     if 'f_extra' not in st.session_state: st.session_state['f_extra'] = {col: [] for col in extra_cols}
 
+    # Фильтры по производным типам и профилям
+    type_filter_cols = {
+        'M_Emo_Profile': 'Эмоциональный профиль',
+        'M_Profile_Zh': 'Мотив. профиль (жизнь)',
+        'M_Profile_Rb': 'Мотив. профиль (работа)',
+        'IPL_Style': 'Полный стиль ИПЛ',
+        'IPL_OI_FN': 'Стиль поиска (ОИ/ФН)',
+        'IPL_PD_NG': 'Стиль оценки (ПД/НГ)',
+        'IPL_IP_VP': 'Стиль действия (ИП/ВП)',
+        'IPL_Structure': 'Структура Г/А/П',
+    }
+    # Уровни Братуся — каждая категория отдельным фильтром
+    bratus_level_cols = {
+        'B_Altruistic_Level': 'Альтруистические смыслы',
+        'B_Existential_Level': 'Экзистенциальные смыслы',
+        'B_Hedonistic_Level': 'Гедонистические смыслы',
+        'B_Self-realization_Level': 'Смыслы самореализации',
+        'B_Status_Level': 'Статусные смыслы',
+        'B_Communicative_Level': 'Коммуникативные смыслы',
+        'B_Family_Level': 'Семейные смыслы',
+        'B_Cognitive_Level': 'Когнитивные смыслы',
+    }
+    if 'f_types' not in st.session_state:
+        st.session_state['f_types'] = {col: [] for col in {**type_filter_cols, **bratus_level_cols}}
+
     # ==========================================
     # ОТРИСОВКА ИНТЕРФЕЙСА
     # ==========================================
@@ -455,12 +897,35 @@ def render_sidebar():
                 for col, label in extra_cols.items():
                     if col in df_raw.columns:
                         options = sorted(df_raw[col].dropna().astype(str).unique().tolist())
-                        # Защита: проверяем, что сохраненные фильтры всё ещё существуют в опциях
                         saved_vals = [v for v in st.session_state['f_extra'].get(col, []) if v in options]
                         sel_extra[col] = st.multiselect(label, options, default=saved_vals)
                     else:
                         sel_extra[col] = []
-                        
+
+            with st.expander("🧬 Фильтры по типам профилей", expanded=False):
+                st.caption("Оставьте пустым, чтобы не фильтровать. Выберите значения, чтобы оставить только людей с нужным типом.")
+                sel_types = {}
+
+                # Мильман и ИПЛ
+                st.markdown("**Профили (Мильман, ИПЛ)**")
+                for col, label in type_filter_cols.items():
+                    if col in df_raw.columns:
+                        options = sorted(df_raw[col].dropna().astype(str).unique().tolist())
+                        saved = [v for v in st.session_state['f_types'].get(col, []) if v in options]
+                        sel_types[col] = st.multiselect(label, options, default=saved, key=f"ft_{col}")
+                    else:
+                        sel_types[col] = []
+
+                # Братусь — уровни
+                st.markdown("**Уровни категорий смыслов (Братусь)**")
+                for col, label in bratus_level_cols.items():
+                    if col in df_raw.columns:
+                        options = sorted(df_raw[col].dropna().astype(str).unique().tolist())
+                        saved = [v for v in st.session_state['f_types'].get(col, []) if v in options]
+                        sel_types[col] = st.multiselect(label, options, default=saved, key=f"ft_{col}")
+                    else:
+                        sel_types[col] = []
+
             submit = st.form_submit_button("Применить фильтры")
 
         # ==========================================
@@ -474,6 +939,7 @@ def render_sidebar():
             st.session_state['f_kmns'] = sel_kmns
             st.session_state['f_fast'] = sel_fast
             st.session_state['f_extra'] = sel_extra
+            st.session_state['f_types'] = sel_types
 
         # ==========================================
         # ПРИМЕНЕНИЕ МАСКИ НА ОСНОВЕ ПАМЯТИ СЕССИИ
@@ -495,7 +961,10 @@ def render_sidebar():
         for col, selected in st.session_state['f_extra'].items():
             if col in df_raw.columns and selected:
                 mask &= df_raw[col].astype(str).isin(selected)
-
+        # Фильтры по типам профилей
+        for col, selected in st.session_state.get('f_types', {}).items():
+            if col in df_raw.columns and selected:
+                mask &= df_raw[col].astype(str).isin(selected)
         df = df_raw[mask].copy()
         
         # ---  ФИЛЬТР ПО ID (ИНДЕКСАМ) ---

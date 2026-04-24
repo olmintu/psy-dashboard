@@ -9,13 +9,13 @@ from utils import render_sidebar, get_name
 from factor_analyzer import FactorAnalyzer
 from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
 
-st.set_page_config(page_title="Психометрика", layout="wide", page_icon="📐")
+st.set_page_config(page_title="Факторный анализ", layout="wide", page_icon="📐")
 
 df = render_sidebar()
 if df is None: st.stop()
 
-st.header("📐 Психометрика (Надежность и Факторная структура)")
-st.warning("⚠️ **Аналитический контекст:** Так как в систему загружены финальные баллы по шкалам, мы исследуем **макро-структуру** (связи шкал между собой и выделение вторичных факторов), а не классическую надежность отдельных вопросов.")
+st.header("📐 Факторный анализ и надёжность")
+st.caption("Поиск латентной структуры данных (FA/PCA) + проверка внутренней согласованности шкал (Альфа Кронбаха).")
 
 num_cols = df.select_dtypes(include=np.number).columns.tolist()
 
@@ -33,52 +33,45 @@ def add_to_state(state_key, prefix):
 def clear_state(state_key):
     st.session_state[state_key] = []
 
-subtab_alpha, subtab_fa = st.tabs(["Внутренняя согласованность (Кронбах)", "Факторная структура (Главные компоненты)"])
+
+def evaluate_sample_adequacy(n_obs, n_vars):
+    """
+    Оценка соотношения наблюдений к переменным для факторного анализа.
+    Стандарты в психометрике:
+      - < 3:1   — критически мало, результаты ненадёжны
+      - 3-5:1   — минимально допустимо, интерпретировать с осторожностью
+      - 5-10:1  — приемлемо
+      - > 10:1  — достаточно
+    """
+    if n_vars == 0:
+        return None
+    ratio = n_obs / n_vars
+    if ratio < 3:
+        return ("🔴", "Критически мало", f"Соотношение n/переменные = {ratio:.1f}:1 — это меньше минимального порога 3:1. "
+                                          f"При {n_vars} переменных нужно минимум {n_vars * 3} наблюдений, а у вас {n_obs}. "
+                                          f"Результаты факторного анализа будут ненадёжными.")
+    if ratio < 5:
+        return ("🟠", "Минимально допустимо", f"Соотношение n/переменные = {ratio:.1f}:1 — в нижней границе допустимого. "
+                                               f"Для более надёжных результатов рекомендуется минимум {n_vars * 5} наблюдений. "
+                                               f"Интерпретируйте с осторожностью.")
+    if ratio < 10:
+        return ("🟡", "Приемлемо", f"Соотношение n/переменные = {ratio:.1f}:1 — приемлемо для исследовательских целей.")
+    return ("🟢", "Достаточно", f"Соотношение n/переменные = {ratio:.1f}:1 — хорошая статистическая мощность.")
+
+
+# ФАКТОРНЫЙ АНАЛИЗ — первая вкладка; Кронбах — вторая
+subtab_fa, subtab_alpha = st.tabs([
+    "🧬 Факторная структура (FA / PCA)",
+    "🔗 Внутренняя согласованность (Альфа Кронбаха)",
+])
 
 # ---------------------------------------------------------
-# 1. АЛЬФА КРОНБАХА
-# ---------------------------------------------------------
-with subtab_alpha:
-    st.subheader("Макро-согласованность шкал (Альфа Кронбаха)")
-    st.markdown("Позволяет проверить, образуют ли выбранные шкалы единый теоретический конструкт.")
-    
-    st.write("**Быстрое добавление шкал:**")
-    a_b1, a_b2, a_b3, a_b4 = st.columns(4)
-    a_b1.button("➕ Братусь", on_click=add_to_state, args=('alpha_sel', 'B_'), key="btn_alpha_b")
-    a_b2.button("➕ Мильман", on_click=add_to_state, args=('alpha_sel', 'M_'), key="btn_alpha_m")
-    a_b3.button("➕ ИПЛ", on_click=add_to_state, args=('alpha_sel', 'IPL_'), key="btn_alpha_i")
-    a_b4.button("❌ Очистить", on_click=clear_state, args=('alpha_sel',), key="btn_alpha_clear")
-
-    alpha_cols = st.multiselect("Выберите шкалы для проверки согласованности:", num_cols, key="alpha_sel", format_func=get_name)
-    
-    if len(alpha_cols) >= 2:
-        df_alpha = df[alpha_cols].dropna()
-        if not df_alpha.empty:
-            alpha, ci = pg.cronbach_alpha(data=df_alpha)
-            if alpha >= 0.8: interpretation = "Высокая (шкалы измеряют один общий супер-фактор)"
-            elif alpha >= 0.7: interpretation = "Приемлемая (хорошая согласованность)"
-            elif alpha >= 0.6: interpretation = "Сомнительная (слабая связь между шкалами)"
-            else: interpretation = "Низкая (шкалы измеряют принципиально разные вещи)"
-            
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                st.metric("Альфа Кронбаха (α)", f"{alpha:.3f}")
-                st.markdown(f"**Интерпретация:** {interpretation}")
-                st.caption(f"95% Доверительный интервал: [{ci[0]:.3f}, {ci[1]:.3f}]")
-            with col_a2:
-                st.info("💡 **Как это понимать?** Если альфа высокая, значит респонденты отвечали на эти шкалы в едином ключе. Это позволяет объединить их в один комплексный индекс.")
-        else:
-            st.error("Недостаточно данных для расчета.")
-    else:
-        st.info("Выберите минимум 2 шкалы.")
-
-# ---------------------------------------------------------
-# 2. ФАКТОРНЫЙ АНАЛИЗ (PCA)
+# 1. ФАКТОРНЫЙ АНАЛИЗ
 # ---------------------------------------------------------
 with subtab_fa:
-    st.subheader("Извлечение скрытых факторов (PCA)")
-    st.markdown("Показывает, как исходные шкалы группируются в укрупненные, скрытые (латентные) факторы.")
-    
+    st.subheader("Извлечение латентных факторов")
+    st.markdown("Показывает, как исходные шкалы группируются в укрупнённые, скрытые (латентные) факторы.")
+
     st.write("**Быстрое добавление шкал:**")
     f_b1, f_b2, f_b3, f_b4 = st.columns(4)
     f_b1.button("➕ Братусь", on_click=add_to_state, args=('fa_sel', 'B_'), key="btn_fa_b")
@@ -87,12 +80,35 @@ with subtab_fa:
     f_b4.button("❌ Очистить", on_click=clear_state, args=('fa_sel',), key="btn_fa_clear")
 
     fa_cols = st.multiselect("Выберите шкалы для факторного анализа:", num_cols, key="fa_sel", format_func=get_name)
-    
+
     if len(fa_cols) >= 3:
         df_fa = df[fa_cols].dropna()
+        n_obs = len(df_fa)
+        n_vars = len(fa_cols)
+
+        # --- ПРОВЕРКА СООТНОШЕНИЯ N / ПЕРЕМЕННЫЕ ---
+        st.markdown("##### 📏 Размер выборки vs количество переменных")
+        adequacy = evaluate_sample_adequacy(n_obs, n_vars)
+        if adequacy is not None:
+            status, label, message = adequacy
+            col_n1, col_n2 = st.columns([1, 3])
+            with col_n1:
+                st.metric(f"{status} {label}", f"{n_obs} / {n_vars}")
+                st.caption("наблюдений / переменных")
+            with col_n2:
+                if status == "🔴":
+                    st.error(message)
+                elif status == "🟠":
+                    st.warning(message)
+                elif status == "🟡":
+                    st.info(message)
+                else:
+                    st.success(message)
+
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(df_fa)
         translated_fa_cols = [get_name(c) for c in fa_cols]
+
         # --- АКАДЕМИЧЕСКАЯ ПРОВЕРКА ДАННЫХ (SPSS-style) ---
         st.markdown("##### 🔬 Диагностика применимости данных")
         try:
@@ -100,7 +116,7 @@ with subtab_fa:
             chi_square_value, p_value = calculate_bartlett_sphericity(df_fa)
             # KMO
             kmo_all, kmo_model = calculate_kmo(df_fa)
-            
+
             col_diag1, col_diag2 = st.columns(2)
             with col_diag1:
                 if kmo_model >= 0.8: kmo_status = "🟢 Отлично"
@@ -108,29 +124,35 @@ with subtab_fa:
                 else: kmo_status = "🔴 Неадекватно"
                 st.metric("Мера адекватности KMO", f"{kmo_model:.3f}", kmo_status)
                 st.caption("Показывает долю дисперсии, которая может быть вызвана скрытыми факторами (норма > 0.6).")
-                
+
             with col_diag2:
                 bartlett_status = "🟢 Значимо" if p_value < 0.05 else "🔴 Незначимо"
                 st.metric("Критерий Бартлетта (p-value)", f"{p_value:.4f}", bartlett_status)
                 st.caption("Доказывает, что шкалы коррелируют между собой и анализ имеет смысл (норма < 0.05).")
         except Exception as e:
             st.warning(f"⚠️ Невозможно рассчитать KMO/Бартлетта. Возможно, данных слишком мало или шкалы дублируют друг друга. Ошибка: {e}")
+
+        st.caption("ℹ️ **Как связаны три проверки выше:** соотношение n/переменные говорит, хватит ли вам данных *в принципе*; "
+                   "KMO отвечает на вопрос *достаточно ли общей дисперсии* у ваших шкал; "
+                   "Бартлетт проверяет, *коррелируют ли шкалы* между собой. Все три должны пройти, чтобы факторный анализ имел смысл.")
+
         st.divider()
-        # Создаем внутренние вкладки для сравнения методов
+
+        # Внутренние вкладки PCA / EFA
         fa_tab_pca, fa_tab_efa = st.tabs(["PCA (Главные компоненты)", "EFA (Факторный анализ)"])
-        
+
         # --- БЛОК 1: PCA ---
         with fa_tab_pca:
             pca_full = PCA()
             pca_full.fit(data_scaled)
-            
+
             col_fa1, col_fa2 = st.columns([1, 2])
             with col_fa1:
                 eigenvalues = pca_full.explained_variance_
                 kaiser_factors = sum(eigenvalues > 1.0)
                 st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors}")
                 n_factors = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors)), key="pca_n")
-            
+
             with col_fa2:
                 fig_scree = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=eigenvalues, mode='lines+markers', name='Собственные значения'))
                 fig_scree.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
@@ -140,9 +162,9 @@ with subtab_fa:
             pca_final = PCA(n_components=n_factors)
             pca_final.fit(data_scaled)
             loadings = pca_final.components_.T * np.sqrt(pca_final.explained_variance_)
-            
+
             factor_names = [f"Компонента {i+1} ({pca_final.explained_variance_ratio_[i]*100:.1f}%)" for i in range(n_factors)]
-            
+
             fig_loadings = go.Figure(data=go.Heatmap(z=loadings, x=factor_names, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Компонента: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
             fig_loadings.update_layout(title="Матрица нагрузок PCA", height=max(400, len(fa_cols) * 35))
             st.plotly_chart(fig_loadings, use_container_width=True)
@@ -153,13 +175,13 @@ with subtab_fa:
             efa_full = FactorAnalyzer(n_factors=len(fa_cols), rotation=None)
             efa_full.fit(data_scaled)
             ev, v = efa_full.get_eigenvalues()
-            
+
             col_efa1, col_efa2 = st.columns([1, 2])
             with col_efa1:
                 kaiser_factors_efa = sum(ev > 1.0)
                 st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors_efa}")
                 n_factors_efa = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors_efa)), key="efa_n")
-                
+
             with col_efa2:
                 fig_scree_efa = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=ev, mode='lines+markers', name='Собственные значения'))
                 fig_scree_efa.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
@@ -175,26 +197,26 @@ with subtab_fa:
                         "Метод извлечения факторов:",
                         options=["minres", "ml", "principal"],
                         format_func=lambda x: {
-                            "minres": "Minres (Минимум остатков - Рекомендуется)", 
-                            "ml": "Maximum Likelihood (Макс. правдоподобие)", 
+                            "minres": "Minres (Минимум остатков - Рекомендуется)",
+                            "ml": "Maximum Likelihood (Макс. правдоподобие)",
                             "principal": "Principal Axis (Главные оси)"
                         }[x],
-                        help="Minres — современный стандарт EFA. ML хорош для нормально распределенных данных. Principal Axis — классика из старых версий SPSS."
+                        help="Minres — современный стандарт EFA. ML хорош для нормально распределённых данных. Principal Axis — классика из старых версий SPSS."
                     )
                 with col_opt2:
                     efa_rotation = st.selectbox(
                         "Метод вращения:",
                         options=["varimax", "promax", "oblimin", None],
                         format_func=lambda x: {
-                            "varimax": "Varimax (Ортогональное - факторы независимы)", 
-                            "promax": "Promax (Косоугольное - факторы связаны)", 
-                            "oblimin": "Oblimin (Косоугольное)", 
+                            "varimax": "Varimax (Ортогональное - факторы независимы)",
+                            "promax": "Promax (Косоугольное - факторы связаны)",
+                            "oblimin": "Oblimin (Косоугольное)",
                             None: "Без вращения"
                         }[x],
-                        help="Varimax делает структуру максимально четкой. Promax и Oblimin разрешают факторам коррелировать (что часто бывает в психологии)."
+                        help="Varimax делает структуру максимально чёткой. Promax и Oblimin разрешают факторам коррелировать (что часто бывает в психологии)."
                     )
 
-            # 1. Создаем словарь с описаниями, чтобы не загромождать основной код
+            # Словарь с описаниями типов вращения
             rotation_info = {
                 "varimax": {
                     "name": "Varimax",
@@ -214,40 +236,79 @@ with subtab_fa:
                 }
             }
 
-            # 2. Финальная модель EFA с выбранными настройками
+            # Финальная модель EFA с выбранными настройками
             efa_final = FactorAnalyzer(n_factors=n_factors_efa, rotation=efa_rotation, method=efa_method)
             efa_final.fit(data_scaled)
             loadings_efa = efa_final.loadings_
-            
+
             factor_names_efa = [f"Фактор {i+1}" for i in range(n_factors_efa)]
-            
-            # 3. Визуализация с динамическим заголовком
+
             current_rotation_name = rotation_info[efa_rotation]["name"]
-            
+
             fig_loadings_efa = go.Figure(data=go.Heatmap(
-                z=loadings_efa, 
-                x=factor_names_efa, 
-                y=translated_fa_cols, 
-                colorscale='RdBu_r', 
-                zmin=-1, 
-                zmax=1, 
-                text=np.round(loadings_efa, 2), 
-                texttemplate="%{text}", 
+                z=loadings_efa,
+                x=factor_names_efa,
+                y=translated_fa_cols,
+                colorscale='RdBu_r',
+                zmin=-1,
+                zmax=1,
+                text=np.round(loadings_efa, 2),
+                texttemplate="%{text}",
                 hovertemplate="Шкала: %{y}<br>Фактор: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"
             ))
-            
+
             fig_loadings_efa.update_layout(
-                title=f"Матрица факторных нагрузок EFA (Вращение: {current_rotation_name})", 
+                title=f"Матрица факторных нагрузок EFA (Вращение: {current_rotation_name})",
                 height=max(400, len(fa_cols) * 35)
             )
-            
+
             st.plotly_chart(fig_loadings_efa, use_container_width=True)
-            
-            # 4. Вывод динамического описания
+
             st.caption(rotation_info[efa_rotation]["desc"])
 
     else:
         st.info("Для факторного анализа требуется минимум 3 шкалы.")
+
+# ---------------------------------------------------------
+# 2. АЛЬФА КРОНБАХА
+# ---------------------------------------------------------
+with subtab_alpha:
+    st.subheader("Макро-согласованность шкал (Альфа Кронбаха)")
+    st.markdown("Позволяет проверить, образуют ли выбранные шкалы единый теоретический конструкт.")
+
+    st.warning("⚠️ **Аналитический контекст:** в систему загружены финальные баллы по шкалам (не ответы на отдельные пункты). "
+               "Поэтому альфа здесь измеряет не классическую надёжность отдельных вопросов, а **макро-согласованность** — "
+               "степень того, насколько выбранные шкалы ведут себя как части одного общего конструкта.")
+
+    st.write("**Быстрое добавление шкал:**")
+    a_b1, a_b2, a_b3, a_b4 = st.columns(4)
+    a_b1.button("➕ Братусь", on_click=add_to_state, args=('alpha_sel', 'B_'), key="btn_alpha_b")
+    a_b2.button("➕ Мильман", on_click=add_to_state, args=('alpha_sel', 'M_'), key="btn_alpha_m")
+    a_b3.button("➕ ИПЛ", on_click=add_to_state, args=('alpha_sel', 'IPL_'), key="btn_alpha_i")
+    a_b4.button("❌ Очистить", on_click=clear_state, args=('alpha_sel',), key="btn_alpha_clear")
+
+    alpha_cols = st.multiselect("Выберите шкалы для проверки согласованности:", num_cols, key="alpha_sel", format_func=get_name)
+
+    if len(alpha_cols) >= 2:
+        df_alpha = df[alpha_cols].dropna()
+        if not df_alpha.empty:
+            alpha, ci = pg.cronbach_alpha(data=df_alpha)
+            if alpha >= 0.8: interpretation = "Высокая (шкалы измеряют один общий супер-фактор)"
+            elif alpha >= 0.7: interpretation = "Приемлемая (хорошая согласованность)"
+            elif alpha >= 0.6: interpretation = "Сомнительная (слабая связь между шкалами)"
+            else: interpretation = "Низкая (шкалы измеряют принципиально разные вещи)"
+
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                st.metric("Альфа Кронбаха (α)", f"{alpha:.3f}")
+                st.markdown(f"**Интерпретация:** {interpretation}")
+                st.caption(f"95% Доверительный интервал: [{ci[0]:.3f}, {ci[1]:.3f}]")
+            with col_a2:
+                st.info("💡 **Как это понимать?** Если альфа высокая, значит респонденты отвечали на эти шкалы в едином ключе. Это позволяет объединить их в один комплексный индекс.")
+        else:
+            st.error("Недостаточно данных для расчёта.")
+    else:
+        st.info("Выберите минимум 2 шкалы.")
 
 st.session_state.safe_alpha_sel = st.session_state.alpha_sel
 st.session_state.safe_fa_sel = st.session_state.fa_sel

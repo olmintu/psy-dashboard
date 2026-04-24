@@ -2,12 +2,151 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from utils import render_sidebar, get_name
 
 st.set_page_config(page_title="Анализ методик", layout="wide", page_icon="🧩")
 
 df = render_sidebar()
 if df is None: st.stop()
+
+
+# =============================================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЙ ПО ТИПАМ
+# =============================================================================
+
+def render_type_distribution(data, col, title, category_order=None, note=None):
+    """
+    Отрисовывает распределение по категориальной колонке в виде одного
+    компактного графика с подписями прямо на столбцах и текстовой сноской снизу.
+
+    Параметры:
+        data: DataFrame (выборка, отфильтрованная на странице)
+        col: имя колонки с категориями
+        title: заголовок блока
+        category_order: опциональный порядок категорий на графике
+        note: опциональная подсказка внизу
+    """
+    if col not in data.columns:
+        return
+    vals = data[col].dropna()
+    if len(vals) == 0:
+        return
+
+    counts = vals.value_counts()
+    total = len(vals)
+
+    # Сортировка: по заданному порядку или по убыванию частоты
+    if category_order is not None:
+        ordered = [c for c in category_order if c in counts.index]
+        extras = [c for c in counts.index if c not in ordered]
+        ordered.extend(extras)
+        counts = counts.reindex(ordered)
+
+    st.markdown(f"**{title}**")
+
+    # Подписи на столбцах: число + процент
+    labels_on_bars = [f"{v} чел. ({v/total*100:.1f}%)" for v in counts.values]
+
+    fig = go.Figure(go.Bar(
+        x=counts.values,
+        y=[str(c) for c in counts.index],
+        orientation='h',
+        text=labels_on_bars,
+        textposition='outside',
+        marker_color='#3498db',
+        hovertemplate="<b>%{y}</b><br>Количество: %{x}<extra></extra>",
+        cliponaxis=False
+    ))
+    # Даём справа 25% запаса — чтобы подписи за столбцами помещались
+    x_max = max(counts.values) * 1.25 if len(counts) else 1
+    fig.update_layout(
+        height=max(180, 55 * len(counts)),
+        margin=dict(l=10, r=30, t=10, b=20),
+        yaxis=dict(autorange='reversed', automargin=True),
+        xaxis=dict(title=None, showticklabels=False, range=[0, x_max]),
+        showlegend=False,
+        font=dict(size=13)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    if note:
+        st.caption(note)
+
+
+def render_bratus_levels_grid(data):
+    """
+    Специальная компактная раскладка для Братуся: 8 категорий × 3 уровня.
+    Показывает таблицу-матрицу: строка — категория, столбцы — уровни.
+    """
+    cats = ['Altruistic', 'Existential', 'Hedonistic', 'Self-realization',
+            'Status', 'Communicative', 'Family', 'Cognitive']
+    cat_ru = {
+        'Altruistic': 'Альтруистические',
+        'Existential': 'Экзистенциальные',
+        'Hedonistic': 'Гедонистические',
+        'Self-realization': 'Самореализации',
+        'Status': 'Статусные',
+        'Communicative': 'Коммуникативные',
+        'Family': 'Семейные',
+        'Cognitive': 'Когнитивные'
+    }
+
+    rows = []
+    total = len(data)
+    for cat in cats:
+        level_col = f'B_{cat}_Level'
+        if level_col not in data.columns:
+            continue
+        counts = data[level_col].value_counts()
+        dom = counts.get('Доминирует', 0)
+        neu = counts.get('Нейтральный', 0)
+        ign = counts.get('Игнорируется', 0)
+        rows.append({
+            'Категория смысла': cat_ru[cat],
+            'Доминирует': f"{dom} ({dom/total*100:.0f}%)" if total > 0 else "0",
+            'Нейтральный': f"{neu} ({neu/total*100:.0f}%)" if total > 0 else "0",
+            'Игнорируется': f"{ign} ({ign/total*100:.0f}%)" if total > 0 else "0",
+        })
+
+    if not rows:
+        st.info("Уровни Братуся не рассчитаны для текущей выборки.")
+        return
+
+    tbl = pd.DataFrame(rows)
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    # Стековый барчарт: каждая категория = строка с долями трёх уровней
+    plot_rows = []
+    for cat in cats:
+        level_col = f'B_{cat}_Level'
+        if level_col not in data.columns:
+            continue
+        for level in ['Доминирует', 'Нейтральный', 'Игнорируется']:
+            n = (data[level_col] == level).sum()
+            plot_rows.append({
+                'Категория': cat_ru[cat],
+                'Уровень': level,
+                'Число': n,
+                'Процент': n / total * 100 if total > 0 else 0,
+            })
+    plot_df = pd.DataFrame(plot_rows)
+
+    level_colors = {'Доминирует': '#27ae60', 'Нейтральный': '#f1c40f', 'Игнорируется': '#e74c3c'}
+    fig = px.bar(
+        plot_df, y='Категория', x='Процент', color='Уровень',
+        orientation='h', color_discrete_map=level_colors,
+        category_orders={'Уровень': ['Доминирует', 'Нейтральный', 'Игнорируется']},
+        text='Число'
+    )
+    fig.update_layout(
+        barmode='stack', height=400, margin=dict(l=10, r=10, t=20, b=20),
+        xaxis=dict(title="Доля респондентов (%)", range=[0, 100]),
+        yaxis=dict(autorange='reversed'), font=dict(size=12)
+    )
+    fig.update_traces(textposition='inside', texttemplate='%{text}')
+    st.plotly_chart(fig, use_container_width=True)
+
 
 st.header("Анализ методик")
     
@@ -25,7 +164,9 @@ subtab_b, subtab_m, subtab_i = st.tabs(["Братусь (Смыслы)", "Мил
 
 with subtab_b:
     st.subheader("Жизненные смыслы")
-    b_cols = [c for c in target_data.columns if c.startswith('B_')]
+    # Берём только числовые шкалы (8 основных), исключая производные _Level колонки
+    b_cols = [c for c in target_data.columns
+              if c.startswith('B_') and not c.endswith('_Level')]
     if b_cols:
         means = target_data[b_cols].mean().sort_values(ascending=True) 
         labels = [get_name(c).replace('Братусь: ', '') for c in means.index]
@@ -57,6 +198,14 @@ with subtab_b:
             item_html = f"<div style='font-size: 15px; margin-bottom: 5px;'><b>{i+1}.</b> {scale_name} — <span style='color:{color}; font-weight:bold;'>{val:.1f} ({status})</span></div>"
             if i < half: list_c1.markdown(item_html, unsafe_allow_html=True)
             else: list_c2.markdown(item_html, unsafe_allow_html=True)
+
+        # --- РАСПРЕДЕЛЕНИЕ ПО УРОВНЯМ (только в сводном режиме) ---
+        if analysis_mode.startswith("Сводный"):
+            st.markdown("---")
+            st.markdown("### 📊 Распределение по уровням в выборке")
+            st.caption(f"Выборка: {len(df)} чел. Для каждой из 8 категорий смыслов показано, у скольких "
+                       f"респондентов она доминирует (3–9 баллов), представлена нейтрально (10–17) или игнорируется (18–24).")
+            render_bratus_levels_grid(df)
     else:
         st.info("Колонки B_ не найдены")
 
@@ -169,6 +318,51 @@ with subtab_m:
                 fig_emo.update_layout(yaxis=dict(range=[0, emo_means.max() + 4]), height=480, margin=dict(l=20, r=20, t=20, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), font=dict(size=14))
                 st.plotly_chart(fig_emo, use_container_width=True)
 
+    # --- РАСПРЕДЕЛЕНИЕ ПО ТИПАМ (только в сводном режиме) ---
+    if analysis_mode.startswith("Сводный"):
+        st.markdown("---")
+        st.markdown("### 📊 Распределение по типам профилей в выборке")
+        st.caption(f"Выборка: {len(df)} чел.")
+
+        # Канонический порядок мотивационного профиля: от развивающего к поддерживающему
+        motiv_order = ['Прогрессивный', 'Экспрессивный', 'Импульсивный', 'Уплощённый', 'Регрессивный', 'Неопределённый']
+
+        # Канонический порядок эмоционального профиля
+        emo_order = ['Стенический', 'Смешанный стенический', 'Смешанный астенический', 'Астенический', 'Не определён']
+
+        dist_col1, dist_col2 = st.columns(2)
+
+        # Канонический порядок мотивационного профиля
+        motiv_order = ['Прогрессивный', 'Экспрессивный', 'Импульсивный',
+                       'Уплощённый', 'Регрессивный', 'Неопределённый']
+        # Канонический порядок эмоционального профиля
+        emo_order = ['Стенический', 'Смешанный стенический',
+                     'Смешанный астенический', 'Астенический', 'Не определён']
+
+        # Два мотивационных профиля в ряд, эмо отдельно внизу во всю ширину
+        col_zh, col_rb = st.columns(2)
+        with col_zh:
+            render_type_distribution(
+                df, 'M_Profile_Zh',
+                "🏠 Мотивационный профиль (жизнь)",
+                category_order=motiv_order,
+                note="«Неопределённый» — пограничный случай, не попадающий ни в одну каноническую категорию."
+            )
+        with col_rb:
+            render_type_distribution(
+                df, 'M_Profile_Rb',
+                "💼 Мотивационный профиль (работа/учёба)",
+                category_order=motiv_order,
+                note="Тот же классификатор, но на основе шкал учебной/рабочей сферы."
+            )
+
+        render_type_distribution(
+            df, 'M_Emo_Profile',
+            "🎭 Эмоциональный профиль",
+            category_order=emo_order,
+            note="«Не определён» — редкий случай, когда Эст=Эаст И Фст=Фаст одновременно."
+        )
+
 with subtab_i:
     st.subheader("Инновационный потенциал личности (ИПЛ)")
     show_group_i = st.checkbox("📊 Сравнить со средними показателями группы", key="i_gr") if analysis_mode == "Индивидуальный (Конкретный респондент)" else False
@@ -232,5 +426,52 @@ with subtab_i:
                         fig_t.add_trace(go.Bar(name='Группа', x=[k2.replace('IPL_Type_', '')], y=[df[k2].mean()], text=[f"{df[k2].mean():.1f}"], textposition='auto', marker_color='lightgrey', showlegend=False))
                     fig_t.update_layout(barmode='group', title=title, showlegend=show_group_i, height=300, margin=dict(l=10, r=10, t=40, b=10), font=dict(size=14), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
                     st.plotly_chart(fig_t, use_container_width=True)
+
+        # --- РАСПРЕДЕЛЕНИЕ ПО СТИЛЯМ И СТРУКТУРЕ (только в сводном режиме) ---
+        if analysis_mode.startswith("Сводный"):
+            st.markdown("---")
+            st.markdown("### 📊 Распределение по стилям ИПЛ в выборке")
+            st.caption(f"Выборка: {len(df)} чел. При равенстве баллов двух полюсов респондент относится "
+                       f"к категории «Неопределённый» — это вариант сохранения информации о пограничных случаях.")
+
+            # Три измерения стиля - в две колонки по два, или в одну с полной шириной
+            col_dim1, col_dim2 = st.columns(2)
+            with col_dim1:
+                render_type_distribution(
+                    df, 'IPL_OI_FN',
+                    "🔍 Стиль поиска",
+                    category_order=['ОИ', 'ФН', 'Неопределённый'],
+                    note="ОИ — осмысленно-интенсивный. ФН — формально-накопительский."
+                )
+            with col_dim2:
+                render_type_distribution(
+                    df, 'IPL_PD_NG',
+                    "⚖️ Стиль оценки",
+                    category_order=['ПД', 'НГ', 'Неопределённый'],
+                    note="ПД — позитивно-дифференцированный. НГ — негативно-генерализованный."
+                )
+
+            col_dim3, col_style = st.columns(2)
+            with col_dim3:
+                render_type_distribution(
+                    df, 'IPL_IP_VP',
+                    "🎯 Стиль действия",
+                    category_order=['ИП', 'ВП', 'Неопределённый'],
+                    note="ИП — инициативно-преобразовательный. ВП — вынужденно-приспособительный."
+                )
+            with col_style:
+                render_type_distribution(
+                    df, 'IPL_Style',
+                    "🎨 Полный стиль (сочетание трёх измерений)",
+                    note="8 канонических сочетаний + «Неопределённый» (если хотя бы в одном измерении было равенство)."
+                )
+
+            # Структура Г/А/П — отдельной полной строкой, потому что значений много (до 13)
+            render_type_distribution(
+                df, 'IPL_Structure',
+                "📐 Структура Г/А/П (по возрастанию)",
+                note="Показывает, какой из трёх компонентов у респондента слабее всего, а какой — сильнее. "
+                     "Например, «П<А<Г» означает: самый слабый — праксеологический, самый сильный — гносеологический."
+            )
     else:
         st.warning("Колонки ИПЛ не найдены.")

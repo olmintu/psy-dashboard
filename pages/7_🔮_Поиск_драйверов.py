@@ -20,8 +20,11 @@ with st.expander("ℹ️ Как пользоваться этой вкладко
 
     **Шаг 1:** Выберите **Целевой показатель (Y)**. Это то, что вы хотите изучить.
     **Шаг 2:** Выберите **Факторы влияния (X)**. Это шкалы, среди которых алгоритм будет искать причины.
-    
-    ⚠️ **Правило чистоты данных:** Не пытайтесь предсказать *Общий балл* методики, используя в качестве факторов её же *Подшкалы*. 
+    **Шаг 3:** Выберите метод определения направления (📈/📉):
+    * **Spearman** — ранговая корреляция, устойчива к выбросам и работает при любых распределениях. Рекомендуется по умолчанию для психологических данных.
+    * **Pearson** — линейная корреляция, предполагает нормальное распределение. Более чувствительна к выбросам.
+
+    ⚠️ **Правило чистоты данных:** Не пытайтесь предсказать *Общий балл* методики, используя в качестве факторов её же *Подшкалы*.
     """)
 
 num_cols = df.select_dtypes(include=np.number).columns.tolist()
@@ -41,9 +44,16 @@ if 'pred_vars' not in st.session_state: st.session_state.pred_vars = st.session_
 c_pred1, c_pred2 = st.columns([1, 1.5])
 with c_pred1:
     target_var = st.selectbox(
-        "🎯 Целевой показатель:", num_cols, 
-        index=num_cols.index('IPL_Total') if 'IPL_Total' in num_cols else 0, 
+        "🎯 Целевой показатель:", num_cols,
+        index=num_cols.index('IPL_Total') if 'IPL_Total' in num_cols else 0,
         key="target_var_7", format_func=get_name
+    )
+    corr_method = st.radio(
+        "Метод корреляции для определения направления:",
+        ["spearman", "pearson"],
+        horizontal=True,
+        index=0,
+        help="Spearman — непараметрический, работает для ненормальных распределений (рекомендуется). Pearson — параметрический, требует нормальности."
     )
 
 # Умные функции-колбэки для галочек
@@ -77,47 +87,60 @@ if st.button("🚀 Найти ключевые драйверы"):
     else:
         with st.spinner("Обучаем модель Random Forest и вычисляем направления..."):
             df_pred = df[[target_var] + predictor_vars].dropna()
-            
+
             if len(df_pred) < 15:
                 st.error("❌ Недостаточно данных для обучения.")
             else:
                 X = df_pred[predictor_vars]
                 y = df_pred[target_var]
-                
+
                 rf = RandomForestRegressor(n_estimators=100, random_state=42, max_depth=5)
                 rf.fit(X, y)
                 r2 = r2_score(y, rf.predict(X))
 
-                dirs = []
+                # --- ОПРЕДЕЛЕНИЕ НАПРАВЛЕНИЯ ЧЕРЕЗ ВЫБРАННЫЙ МЕТОД ---
+                # Считаем ОБЕ корреляции: основную (выбранный метод) и альтернативную
+                dirs, primary_r, alt_r = [], [], []
+                alt_method = 'pearson' if corr_method == 'spearman' else 'spearman'
+
                 for c in predictor_vars:
-                    corr = df_pred[c].corr(df_pred[target_var])
-                    if corr > 0: dirs.append("📈") 
-                    else: dirs.append("📉") 
+                    r_primary = df_pred[c].corr(df_pred[target_var], method=corr_method)
+                    r_alt = df_pred[c].corr(df_pred[target_var], method=alt_method)
+                    dirs.append("📈" if r_primary > 0 else "📉")
+                    primary_r.append(r_primary)
+                    alt_r.append(r_alt)
 
                 importance = pd.DataFrame({
                     'Фактор': [get_name(c) for c in predictor_vars],
-                    'Колонка': predictor_vars, 
+                    'Колонка': predictor_vars,
                     'Важность': rf.feature_importances_ * 100,
-                    'Знак': dirs
+                    'Знак': dirs,
+                    f'r ({corr_method})': primary_r,
+                    f'r ({alt_method})': alt_r,
                 })
-                
+
                 importance['Фактор_с_иконкой'] = importance['Знак'] + " " + importance['Фактор']
                 importance = importance.sort_values(by='Важность', ascending=True)
 
                 st.session_state['rf_results'] = {
                     'target_var': target_var, 'df_pred': df_pred,
-                    'importance': importance, 'r2': r2, 'model': rf, 'features': predictor_vars
+                    'importance': importance, 'r2': r2, 'model': rf,
+                    'features': predictor_vars, 'corr_method': corr_method,
+                    'alt_method': alt_method
                 }
 
 if 'rf_results' in st.session_state:
     res = st.session_state['rf_results']
     t_var, df_p, imp, r_sq = res['target_var'], res['df_pred'], res['importance'], res['r2']
+    used_method = res.get('corr_method', 'pearson')
+    alt_method_used = res.get('alt_method', 'spearman')
 
     st.markdown("---")
     res_c1, res_c2 = st.columns([2, 1])
 
     with res_c1:
         st.markdown(f"#### 📊 Рейтинг влияния на «{get_name(t_var)}»")
+        st.caption(f"Направления (📈/📉) определены по корреляции **{used_method.capitalize()}**")
         fig_rf = px.bar(imp, x='Важность', y='Фактор_с_иконкой', orientation='h', color='Важность', color_continuous_scale='Viridis')
         fig_rf.update_layout(xaxis_title="Сила влияния (в %)", yaxis_title="", coloraxis_showscale=False, height=max(400, len(imp) * 35))
         st.plotly_chart(fig_rf, use_container_width=True, config={'displayModeBar': False})
@@ -134,10 +157,33 @@ if 'rf_results' in st.session_state:
         for i, row in top3.iterrows():
             st.markdown(f"{row['Знак']} **{row['Фактор']}** ({row['Важность']:.1f}%)")
 
+    # --- ТАБЛИЦА СО СРАВНЕНИЕМ SPEARMAN И PEARSON ---
+    with st.expander("🔬 Подробная таблица: сравнение Spearman и Pearson"):
+        st.markdown(f"""
+        Направления в основном рейтинге построены по **{used_method}**. Ниже — оба коэффициента.
+        Если знаки расходятся у какой-то шкалы — это сигнал о нелинейной связи или влиянии выбросов.
+        """)
+        table = imp.sort_values(by='Важность', ascending=False).copy()
+        table_display = pd.DataFrame({
+            'Фактор': table['Фактор'].values,
+            'Важность (RF, %)': table['Важность'].round(1).values,
+            'Направление': table['Знак'].values,
+            f'r (Spearman)': table[f"r ({'spearman' if used_method == 'spearman' else alt_method_used})"].round(3).values,
+            f'r (Pearson)':  table[f"r ({'pearson' if used_method == 'pearson' else alt_method_used})"].round(3).values,
+        })
+        # Mark rows where signs of Spearman and Pearson disagree
+        def highlight_disagreement(row):
+            rs, rp = row['r (Spearman)'], row['r (Pearson)']
+            if (rs > 0 and rp < 0) or (rs < 0 and rp > 0):
+                return ['background-color: #fff3cd'] * len(row)
+            return [''] * len(row)
+        st.dataframe(table_display.style.apply(highlight_disagreement, axis=1), use_container_width=True)
+        st.caption("🟡 Жёлтая строка = Spearman и Pearson дают противоположные знаки (возможна нелинейность или выбросы).")
+
     st.markdown("---")
     st.markdown("### 🔍 Как именно работают Топ-3 драйвера?")
     st.markdown("`📈 Катализатор` (тянет вверх) | `📉 Блокатор` (тянет вниз)")
-    
+
     graph_cols = st.columns(3)
     for idx, (index, row) in enumerate(top3.iterrows()):
         with graph_cols[idx]:
@@ -148,7 +194,7 @@ if 'rf_results' in st.session_state:
     st.markdown("### 🎛️ Проверить другие факторы")
     ordered_features = imp.sort_values(by='Важность', ascending=False)['Фактор'].tolist()
     selected_feature_ru = st.selectbox("Выберите любую шкалу из рейтинга для детального анализа:", ordered_features)
-    
+
     if selected_feature_ru:
         selected_row = imp[imp['Фактор'] == selected_feature_ru].iloc[0]
         fig_detail = px.scatter(df_p, x=selected_row['Колонка'], y=t_var, trendline="ols", trendline_color_override="red", opacity=0.7, hover_data=df_p.columns)
@@ -165,9 +211,9 @@ if 'rf_results' in st.session_state:
     if 'model' in res:
         rf_model, all_features = res['model'], res['features']
         top5_cols = imp.sort_values(by='Важность', ascending=False).head(5)['Колонка'].tolist()
-        
+
         sim_col1, sim_col2 = st.columns([1.5, 1])
-        
+
         with sim_col1:
             st.markdown("#### Управление факторами (Топ-5)")
             with st.form("simulator_form"):
@@ -175,13 +221,13 @@ if 'rf_results' in st.session_state:
                 for col in top5_cols:
                     user_inputs[col] = st.slider(get_name(col), min_value=float(df_p[col].min()), max_value=float(df_p[col].max()), value=float(df_p[col].mean()), step=0.5)
                 submit_sim = st.form_submit_button("🔄 Пересчитать прогноз")
-        
+
         with sim_col2:
             sim_data = {col: user_inputs.get(col, df_p[col].mean()) for col in all_features}
             predicted_target = rf_model.predict(pd.DataFrame([sim_data]))[0]
-            
+
             t_min, t_max, t_mean = df_p[t_var].min(), df_p[t_var].max(), df_p[t_var].mean()
-            
+
             st.markdown(f"#### Прогноз: {get_name(t_var)}")
             fig_gauge = go.Figure(go.Indicator(
                 mode="gauge+number+delta", value=predicted_target, delta={'reference': t_mean, 'position': "top"},
@@ -190,11 +236,11 @@ if 'rf_results' in st.session_state:
             ))
             fig_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig_gauge, use_container_width=True, config={'displayModeBar': False})
-            
+
             if submit_sim: st.success("Прогноз успешно обновлен!")
             else: st.caption("Сдвиньте ползунки слева и нажмите «Пересчитать прогноз», чтобы обновить спидометр.")
 
-# Сохранение бэкапа 
+# Сохранение бэкапа
 st.session_state.safe_cb_b_7 = st.session_state.cb_b_7
 st.session_state.safe_cb_m_7 = st.session_state.cb_m_7
 st.session_state.safe_cb_i_7 = st.session_state.cb_i_7
