@@ -818,6 +818,66 @@ def apply_fdr_correction(p_matrix: pd.DataFrame, method: str = 'fdr_bh') -> pd.D
     np.fill_diagonal(p_corrected.values, 0.0)
 
     return p_corrected
+@st.cache_data
+def calculate_mahalanobis_distances(df_subset: pd.DataFrame) -> pd.DataFrame:
+    """
+    Расчёт расстояния Махаланобиса для каждого наблюдения.
+
+    Махаланобис измеряет, насколько каждый респондент удалён от
+    многомерного центра выборки с учётом ковариаций между переменными.
+    Результат: значения D² распределены приблизительно как χ²(df=k),
+    где k — число переменных.
+
+    Возвращает DataFrame с колонками:
+        - mahal_d2:   квадрат расстояния Махаланобиса (D²)
+        - mahal_p:    p-value по χ² (с k степенями свободы)
+        - is_outlier_strict:    p < 0.001 (рекомендация для psychology research)
+        - is_outlier_moderate:  p < 0.01  (мягкий критерий)
+    """
+    from scipy.stats import chi2
+
+    X = df_subset.dropna().values
+    n, k = X.shape
+
+    if n < k + 2:
+        # Слишком мало наблюдений для надёжной оценки
+        return pd.DataFrame(index=df_subset.dropna().index, data={
+            'mahal_d2': np.nan, 'mahal_p': np.nan,
+            'is_outlier_strict': False, 'is_outlier_moderate': False,
+        })
+
+    # Центр и обратная ковариационная матрица
+    mean_vec = X.mean(axis=0)
+    cov_matrix = np.cov(X, rowvar=False)
+
+    # Псевдо-инверсия — устойчива к мультиколлинеарности
+    try:
+        inv_cov = np.linalg.pinv(cov_matrix)
+    except np.linalg.LinAlgError:
+        return pd.DataFrame(index=df_subset.dropna().index, data={
+            'mahal_d2': np.nan, 'mahal_p': np.nan,
+            'is_outlier_strict': False, 'is_outlier_moderate': False,
+        })
+
+    # D² для каждого наблюдения: (x-μ)ᵀ Σ⁻¹ (x-μ)
+    diff = X - mean_vec
+    d2_values = np.einsum('ij,jk,ik->i', diff, inv_cov, diff)
+
+    # p-value по распределению χ² с k степенями свободы
+    # Большой D² → маленькое p → выброс
+    p_values = 1 - chi2.cdf(d2_values, df=k)
+
+    result = pd.DataFrame(
+        index=df_subset.dropna().index,
+        data={
+            'mahal_d2': d2_values,
+            'mahal_p': p_values,
+            'is_outlier_strict': p_values < 0.001,
+            'is_outlier_moderate': p_values < 0.01,
+        }
+    )
+    return result
+
 def init_session_state():
     """Инициализация базовых переменных и автозагрузка демо-данных"""
     if 'disable_auto_demo' not in st.session_state:

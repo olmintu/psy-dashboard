@@ -5,21 +5,45 @@ import plotly.express as px
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from utils import render_sidebar, get_name
+from utils import render_sidebar, get_name, calculate_mahalanobis_distances
 
 st.set_page_config(page_title="Детектор аномалий", layout="wide", page_icon="👽")
 
 df = render_sidebar()
 if df is None: st.stop()
 
-st.header("👽 Детектор аномалий (Изоляционный лес)")
+st.header("👽 Детектор аномалий")
 st.markdown("Поиск нетипичных респондентов с парадоксальными сочетаниями мотивов и смыслов.")
 
+method_outlier = st.radio(
+    "Метод поиска многомерных выбросов:",
+    ["Isolation Forest (ML)", "Расстояние Махаланобиса (классический)"],
+    horizontal=True,
+    help="Isolation Forest — алгоритм машинного обучения, ищет нетипичные паттерны. "
+         "Махаланобис — классический статистический метод, основанный на χ²-распределении. "
+         "Для академической работы рекомендуется Махаланобис (его понимают рецензенты-психологи)."
+)
+
 with st.expander("ℹ️ Как это работает?"):
-    st.markdown("""
-    Алгоритм **Isolation Forest** ищет *многомерные* выбросы. 
-    Например, высокий мотив 'Комфорт' — это нормально. Высокая 'Творческая активность' — тоже нормально. Но если у человека **оба** эти показателя зашкаливают (что психологически парадоксально), алгоритм пометит его как аномалию.
-    """)
+    if method_outlier == "Isolation Forest (ML)":
+        st.markdown("""
+        Алгоритм **Isolation Forest** ищет *многомерные* выбросы через построение случайных деревьев. 
+        Например, высокий мотив 'Комфорт' — это нормально. Высокая 'Творческая активность' — тоже нормально. Но если у человека **оба** эти показателя зашкаливают (что психологически парадоксально), алгоритм пометит его как аномалию.
+        
+        Это **разведочный** инструмент — хорош для поиска интересных кейсов, но не имеет строгого статистического основания.
+        """)
+    else:
+        st.markdown("""
+        **Расстояние Махаланобиса** — классический статистический метод обнаружения многомерных выбросов.
+        Для каждого респондента считается, насколько он удалён от центра «облака» данных, с учётом ковариаций между переменными.
+
+        - Распределение D² ≈ χ² с df = k (число переменных)
+        - **Строгий критерий:** p < 0.001 (рекомендуется для академической работы)
+        - **Мягкий критерий:** p < 0.01 (для предварительного просмотра)
+
+        Это **стандартный** метод для подготовки данных к регрессионному и факторному анализу 
+        (Tabachnick & Fidell, 2019). Используется в психометрии и SEM.
+        """)
 
 num_cols = df.select_dtypes(include=np.number).columns.tolist()
 
@@ -57,47 +81,75 @@ with cb_a2: st.checkbox("Шкалы Мильмана (Аномалии)", key='c
 with cb_a3: st.checkbox("Шкалы ИПЛ (Аномалии)", key='cb_i_8', on_change=toggle_i_8)
 
 anom_vars = st.multiselect("Анализируемые метрики:", num_cols, key="anom_vars", format_func=get_name)
-contamination = st.slider(
-    "Какой процент выборки считать 'странным' (чувствительность)?", 
-    min_value=1, max_value=15, value=5, step=1
-)
+
+# Параметры — отличаются для разных методов
+if method_outlier == "Isolation Forest (ML)":
+    contamination_label = "Какой процент выборки считать 'странным' (чувствительность)?"
+    contamination = st.slider(contamination_label, min_value=1, max_value=15, value=5, step=1)
+    mahal_threshold_label = None
+else:
+    mahal_threshold = st.radio(
+        "Порог значимости для D²:",
+        ["Строгий (p < 0.001)", "Умеренный (p < 0.01)"],
+        index=0,
+        horizontal=True,
+        help="Строгий — стандарт для академических работ. Умеренный — для предварительного просмотра."
+    )
 
 # КНОПКА ПОИСКА (Сохраняем результаты в память сессии)
-if st.button("🔍 Найти аномалии", help="Запустить алгоритм Isolation Forest", type="primary"):
+if st.button("🔍 Найти аномалии", type="primary"):
     if len(anom_vars) < 2:
         st.warning("⚠️ Для поиска многомерных аномалий нужно выбрать хотя бы 2 шкалы.")
     else:
         with st.spinner("Прочесываем данные в поисках аномалий..."):
             df_anom = df.dropna(subset=anom_vars).copy()
-            
-            if len(df_anom) < 20:
-                st.error("❌ Слишком мало данных для обучения детектора.")
+
+            if len(df_anom) < max(20, len(anom_vars) + 5):
+                st.error(f"❌ Слишком мало данных. Нужно минимум {max(20, len(anom_vars) + 5)} наблюдений для {len(anom_vars)} переменных.")
             else:
                 X_anom = df_anom[anom_vars]
-                
-                # Обучаем Изоляционный лес
-                iso = IsolationForest(contamination=contamination/100.0, random_state=42)
-                df_anom['Anomaly'] = iso.fit_predict(X_anom)
-                df_anom['Anomaly_Label'] = df_anom['Anomaly'].map({1: 'Норма', -1: 'Аномалия'})
-                df_anom['Anomaly_Score'] = iso.decision_function(X_anom) 
-                
+
+                if method_outlier == "Isolation Forest (ML)":
+                    # === ВЕТКА 1: Isolation Forest ===
+                    iso = IsolationForest(contamination=contamination/100.0, random_state=42)
+                    df_anom['Anomaly'] = iso.fit_predict(X_anom)
+                    df_anom['Anomaly_Label'] = df_anom['Anomaly'].map({1: 'Норма', -1: 'Аномалия'})
+                    df_anom['Anomaly_Score'] = iso.decision_function(X_anom)
+                    df_anom['mahal_d2'] = np.nan
+                    df_anom['mahal_p'] = np.nan
+                else:
+                    # === ВЕТКА 2: Махаланобис ===
+                    mahal_result = calculate_mahalanobis_distances(X_anom)
+                    df_anom = df_anom.join(mahal_result, how='left')
+
+                    if mahal_threshold == "Строгий (p < 0.001)":
+                        df_anom['Anomaly'] = df_anom['is_outlier_strict'].map({True: -1, False: 1})
+                    else:
+                        df_anom['Anomaly'] = df_anom['is_outlier_moderate'].map({True: -1, False: 1})
+
+                    df_anom['Anomaly_Label'] = df_anom['Anomaly'].map({1: 'Норма', -1: 'Аномалия'})
+                    # Anomaly_Score: чем больше D², тем более выбросовый (для сортировки)
+                    # Инвертируем знак чтобы отрицательные = выбросы (как в Isolation Forest)
+                    df_anom['Anomaly_Score'] = -df_anom['mahal_d2']
+
                 if 'FIO' in df_anom.columns:
                     df_anom['Display_Name'] = df_anom['FIO'].fillna("Аноним") + " (ID: " + df_anom.index.astype(str) + ")"
                 else:
                     df_anom['Display_Name'] = "Респондент ID: " + df_anom.index.astype(str)
-                
-                # PCA для визуализации (2D)
+
+                # PCA для визуализации (2D) — общая для обоих методов
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_anom)
                 pca_anom = PCA(n_components=2)
                 components = pca_anom.fit_transform(X_scaled)
-                
+
                 df_anom['PCA1'] = components[:, 0]
                 df_anom['PCA2'] = components[:, 1]
-                
+
                 st.session_state['anom_results'] = {
                     'df_anom': df_anom,
-                    'anom_vars': anom_vars
+                    'anom_vars': anom_vars,
+                    'method_used': method_outlier,
                 }
 
 # ОТРИСОВКА ИНТЕРФЕЙСА (Берем данные из памяти)
@@ -105,10 +157,12 @@ if 'anom_results' in st.session_state:
     res_a = st.session_state['anom_results']
     df_a = res_a['df_anom']
     a_vars = res_a['anom_vars']
-    
+    method_used = res_a.get('method_used', 'Isolation Forest (ML)')
+
     st.markdown("---")
+    st.caption(f"Использованный метод: **{method_used}**")
     c_res1, c_res2 = st.columns([2, 1])
-    
+
     with c_res1:
         st.markdown("#### 🌌 Карта респондентов (Проекция)")
         
@@ -135,6 +189,22 @@ if 'anom_results' in st.session_state:
         
     st.markdown("#### 🕵️‍♂️ Досье на нетипичных респондентов")
     outliers = df_a[df_a['Anomaly'] == -1].sort_values('Anomaly_Score')
+
+    # Если использовался Махаланобис — показываем таблицу с D² и p-values
+    if method_used == "Расстояние Махаланобиса (классический)" and not outliers.empty:
+        st.markdown("##### 📋 Сводка по выбросам (D² и p-value)")
+        mahal_summary = outliers[['Display_Name', 'mahal_d2', 'mahal_p']].copy()
+        mahal_summary.columns = ['Респондент', 'D² (Махаланобис)', 'p-value (χ²)']
+        mahal_summary['D² (Махаланобис)'] = mahal_summary['D² (Махаланобис)'].round(2)
+        mahal_summary['p-value (χ²)'] = mahal_summary['p-value (χ²)'].apply(
+            lambda p: f"{p:.4f}" if p >= 0.0001 else f"{p:.2e}"
+        )
+        st.dataframe(mahal_summary, use_container_width=True, hide_index=True)
+        st.caption(
+            f"💡 Расстояния D² подчиняются распределению χ² с df={len(a_vars)}. "
+            f"Чем больше D², тем сильнее респондент отклонён от центра выборки."
+        )
+        st.markdown("---")
     
     if outliers.empty:
         st.success("При заданных настройках ярких аномалий не найдено. Выборка очень однородна.")
