@@ -770,6 +770,54 @@ def calc_correlation_matrices(df_subset, method):
             p_matrix.iloc[j, i] = p_val 
     return r_matrix, p_matrix
 
+@st.cache_data
+def apply_fdr_correction(p_matrix: pd.DataFrame, method: str = 'fdr_bh') -> pd.DataFrame:
+    """
+    Применяет поправку на множественные сравнения к матрице p-значений.
+
+    Из квадратной матрицы p-values берёт только верхний треугольник
+    (без диагонали), применяет к нему поправку, затем возвращает
+    скорректированную симметричную матрицу.
+
+    method:
+        'fdr_bh'      — Benjamini-Hochberg (FDR), рекомендуется
+        'bonferroni'  — более строгая поправка
+    """
+    from statsmodels.stats.multitest import multipletests
+
+    cols = p_matrix.columns
+    n = len(cols)
+
+    # Извлекаем индексы верхнего треугольника (i < j)
+    iu = np.triu_indices(n, k=1)
+    p_values_flat = p_matrix.values[iu]
+
+    # Если все NaN или массив пустой — возвращаем оригинал
+    if len(p_values_flat) == 0 or np.all(np.isnan(p_values_flat)):
+        return p_matrix.copy()
+
+    # Применяем поправку
+    valid_mask = ~np.isnan(p_values_flat)
+    corrected_flat = np.full_like(p_values_flat, fill_value=np.nan, dtype=float)
+
+    if valid_mask.sum() > 0:
+        _, corrected_valid, _, _ = multipletests(
+            p_values_flat[valid_mask],
+            method=method,
+            alpha=0.05
+        )
+        corrected_flat[valid_mask] = corrected_valid
+
+    # Собираем обратно в матрицу
+    p_corrected = p_matrix.copy()
+    p_corrected.values[iu] = corrected_flat
+    # Симметрия: нижний треугольник = верхний транспонированный
+    il = np.tril_indices(n, k=-1)
+    p_corrected.values[il] = p_corrected.T.values[il]
+    # Диагональ — нули (корреляция переменной с самой собой)
+    np.fill_diagonal(p_corrected.values, 0.0)
+
+    return p_corrected
 def init_session_state():
     """Инициализация базовых переменных и автозагрузка демо-данных"""
     if 'disable_auto_demo' not in st.session_state:

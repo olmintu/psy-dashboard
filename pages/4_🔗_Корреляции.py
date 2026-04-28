@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import pingouin as pg
 import io
-from utils import render_sidebar, get_name, calc_correlation_matrices
+from utils import render_sidebar, get_name, calc_correlation_matrices, apply_fdr_correction
 
 st.set_page_config(page_title="Корреляции", layout="wide", page_icon="🔗")
 
@@ -33,32 +33,76 @@ btn_c4.button("❌ Очистить всё", on_click=clear_all)
 
 corr_cols = st.multiselect("Выберите показатели:", num_cols, key="corr_sel", format_func=get_name)
 
-col1, col2 = st.columns(2)
-with col1: method = st.radio("Метод корреляции:", ["spearman", "pearson"], horizontal=True, help="Spearman лучше подходит для психологических опросников. Pearson — для строго нормально распределенных метрических данных.")
-with col2: show_stars = st.checkbox("Показывать значимость (звездочки)", value=True)
+col1, col2, col3 = st.columns(3)
+with col1: 
+    method = st.radio("Метод корреляции:", ["spearman", "pearson"], horizontal=True, 
+                      help="Spearman лучше подходит для психологических опросников. Pearson — для строго нормально распределенных метрических данных.")
+with col2: 
+    show_stars = st.checkbox("Показывать значимость (звездочки)", value=True)
+with col3:
+    fdr_mode = st.radio(
+        "Поправка на множ. сравнения:", 
+        ["Без поправки", "FDR (Бенджамини-Хохберг)", "Бонферрони"],
+        index=1,  # FDR по умолчанию — он рекомендуется для магистратуры
+        help="При большом числе попарных сравнений (k показателей дают k(k-1)/2 пар) часть «значимых» связей появляется случайно. FDR — стандартная защита от этого."
+    )
 
 if len(corr_cols) > 1:
     if st.button("🚀 Рассчитать матрицу корреляций", type="primary", use_container_width=True):
         with st.spinner("Считаем корреляции..."):
             df_corr = df[corr_cols].dropna()
             r_matrix, p_matrix = calc_correlation_matrices(df_corr, method)
-            st.session_state['corr_results'] = {'r_matrix': r_matrix, 'p_matrix': p_matrix, 'cols': corr_cols, 'method': method}
+
+            # Применяем поправку, если выбрана
+            p_matrix_raw = p_matrix.copy()  # сохраняем сырые p-values
+            if fdr_mode == "FDR (Бенджамини-Хохберг)":
+                p_matrix = apply_fdr_correction(p_matrix, method='fdr_bh')
+            elif fdr_mode == "Бонферрони":
+                p_matrix = apply_fdr_correction(p_matrix, method='bonferroni')
+
+            st.session_state['corr_results'] = {
+                'r_matrix': r_matrix, 
+                'p_matrix': p_matrix,           # с поправкой (или без, если не выбрана)
+                'p_matrix_raw': p_matrix_raw,   # всегда сырые
+                'cols': corr_cols, 
+                'method': method,
+                'fdr_mode': fdr_mode,
+            }
 
     if 'corr_results' in st.session_state:
         res = st.session_state['corr_results']
         r_matrix, p_matrix, saved_cols = res['r_matrix'], res['p_matrix'], res['cols']
-        
+        saved_fdr = res.get('fdr_mode', 'Без поправки')
+        p_matrix_raw = res.get('p_matrix_raw', p_matrix)
+
+        # Информация о применённой поправке
+        if saved_fdr == "FDR (Бенджамини-Хохберг)":
+            st.info(f"📊 Применена FDR-поправка (Бенджамини-Хохберг). Звёздочки и фильтры внизу учитывают скорректированные p-values.")
+        elif saved_fdr == "Бонферрони":
+            st.info(f"📊 Применена поправка Бонферрони (более строгая, чем FDR).")
+
         if saved_cols != corr_cols:
             st.warning("⚠️ Вы изменили состав шкал. Нажмите кнопку 'Рассчитать матрицу', чтобы обновить данные.")
+        if saved_fdr != fdr_mode:
+            st.warning("⚠️ Вы изменили тип поправки. Нажмите кнопку 'Рассчитать матрицу' для пересчёта.")
         
         annot_matrix, hover_matrix = np.empty_like(r_matrix, dtype=object), np.empty_like(r_matrix, dtype=object)
         
         for i in range(len(saved_cols)):
             for j in range(len(saved_cols)):
                 r_val, p_val = r_matrix.iloc[i, j], p_matrix.iloc[i, j]
+                p_raw = p_matrix_raw.iloc[i, j]
                 stars = ("***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "") if i != j else ""
                 annot_matrix[i, j] = f"{r_val:.2f}{stars}" if show_stars else f"{r_val:.2f}"
-                hover_matrix[i, j] = f"<b>X:</b> {get_name(saved_cols[j])}<br><b>Y:</b> {get_name(saved_cols[i])}<br><b>r =</b> {r_val:.3f} {stars}<br><b>p-value =</b> {p_val:.4f}"
+
+                # Hover: показываем оба p-value (сырое и скорректированное)
+                hover_text = f"<b>X:</b> {get_name(saved_cols[j])}<br><b>Y:</b> {get_name(saved_cols[i])}<br><b>r =</b> {r_val:.3f}"
+                if saved_fdr != "Без поправки":
+                    hover_text += f"<br><b>p (сырое) =</b> {p_raw:.4f}"
+                    hover_text += f"<br><b>p (с поправкой) =</b> {p_val:.4f} {stars}"
+                else:
+                    hover_text += f"<br><b>p =</b> {p_val:.4f} {stars}"
+                hover_matrix[i, j] = hover_text
         
         translated_cols = [get_name(c) for c in saved_cols]
         fig_corr = go.Figure(data=go.Heatmap(z=r_matrix.values, x=translated_cols, y=translated_cols, text=annot_matrix, texttemplate="%{text}", customdata=hover_matrix, hovertemplate="%{customdata}<extra></extra>", colorscale='RdBu_r', zmin=-1, zmax=1))
@@ -95,7 +139,8 @@ if len(corr_cols) > 1:
             for j in range(i + 1, len(saved_cols)):
                 c1, c2 = saved_cols[i], saved_cols[j]
                 r, p = r_matrix.loc[c1, c2], p_matrix.loc[c1, c2]
-                
+                p_raw_val = p_matrix_raw.loc[c1, c2]
+
                 if cross_method_only:
                     pref1 = c1.split('_')[0] if '_' in c1 else c1
                     pref2 = c2.split('_')[0] if '_' in c2 else c2
@@ -104,7 +149,14 @@ if len(corr_cols) > 1:
                 if min_r <= abs(r) <= max_r and (sig_level == "Показывать незначимые" or p < p_thresh):
                     if link_type == "Все" or (link_type == "Прямая (r > 0)" and r > 0) or (link_type == "Обратная (r < 0)" and r < 0): 
                         s = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else ""))
-                        links.append({'Показатель 1': get_name(c1), 'Показатель 2': get_name(c2), 'r': r, 'p-value': p, 'Значимость': s})
+                        row = {'Показатель 1': get_name(c1), 'Показатель 2': get_name(c2), 'r': r}
+                        if saved_fdr != "Без поправки":
+                            row['p (сырое)'] = p_raw_val
+                            row['p (с поправкой)'] = p
+                        else:
+                            row['p-value'] = p
+                        row['Значимость'] = s
+                        links.append(row)
                             
         if not links: st.info("По заданным фильтрам связей не найдено.")
         else:
@@ -118,6 +170,10 @@ if len(corr_cols) > 1:
             st.markdown("---")
             for _, row in links_df.iterrows():
                 color_dot = "🔴" if row['r'] > 0 else "🔵"
-                st.markdown(f"{color_dot} **{row['Показатель 1']}** ↔ **{row['Показатель 2']}** | `r = {row['r']:.2f}` {row['Значимость']} *(p={row['p-value']:.3f})*")
+                if 'p (с поправкой)' in row:
+                    p_text = f"p_raw={row['p (сырое)']:.3f}, p_adj={row['p (с поправкой)']:.3f}"
+                else:
+                    p_text = f"p={row['p-value']:.3f}"
+                st.markdown(f"{color_dot} **{row['Показатель 1']}** ↔ **{row['Показатель 2']}** | `r = {row['r']:.2f}` {row['Значимость']} *({p_text})*")
 
 st.session_state.safe_corr_sel = st.session_state.corr_sel
