@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import pingouin as pg
 from sklearn.preprocessing import StandardScaler
+import io
 from sklearn.decomposition import PCA
 from utils import render_sidebar, get_name
 from factor_analyzer import FactorAnalyzer
@@ -58,7 +59,130 @@ def evaluate_sample_adequacy(n_obs, n_vars):
         return ("🟡", "Приемлемо", f"Соотношение n/переменные = {ratio:.1f}:1 — приемлемо для исследовательских целей.")
     return ("🟢", "Достаточно", f"Соотношение n/переменные = {ratio:.1f}:1 — хорошая статистическая мощность.")
 
+def build_factor_interpretation(loadings, var_labels_raw, factor_names, threshold=0.3):
+    """
+    Классифицирует шкалы по факторам на основе матрицы нагрузок.
 
+    Возвращает:
+        dict_by_factor: {factor_idx: [(col_raw, loading), ...]} — отсортировано по |loading|
+        df_grouped: DataFrame для листа Excel "Группировка по факторам"
+        df_cross:   DataFrame для листа Excel "Cross-loadings"
+        cross_set:  set колонок с cross-loading (для подсветки в UI)
+        unloaded_set: set колонок без сильных нагрузок (для сводки в UI)
+    """
+    n_vars, n_factors = loadings.shape
+
+    cross_set, unloaded_set = set(), set()
+    for i, col_raw in enumerate(var_labels_raw):
+        sig_count = sum(1 for j in range(n_factors) if abs(loadings[i, j]) >= threshold)
+        if sig_count == 0:
+            unloaded_set.add(col_raw)
+        elif sig_count >= 2:
+            cross_set.add(col_raw)
+
+    # Группировка нагрузок по факторам
+    dict_by_factor = {j: [] for j in range(n_factors)}
+    for i, col_raw in enumerate(var_labels_raw):
+        for j in range(n_factors):
+            if abs(loadings[i, j]) >= threshold:
+                dict_by_factor[j].append((col_raw, float(loadings[i, j])))
+    for j in range(n_factors):
+        dict_by_factor[j].sort(key=lambda x: abs(x[1]), reverse=True)
+
+    # Длинная таблица для Excel
+    rows = []
+    for j in range(n_factors):
+        for col_raw, ld in dict_by_factor[j]:
+            rows.append({
+                'Фактор': factor_names[j],
+                'Шкала': get_name(col_raw),
+                'Нагрузка': round(ld, 3),
+                '|Нагрузка|': round(abs(ld), 3),
+                'Знак': '+' if ld > 0 else '−',
+                'Тип': 'Cross-loading' if col_raw in cross_set else 'Чистая'
+            })
+    df_grouped = pd.DataFrame(rows)
+
+    # Таблица cross-loadings: каждая шкала со ВСЕМИ её значимыми нагрузками
+    cross_rows = []
+    for col_raw in cross_set:
+        i = var_labels_raw.index(col_raw)
+        for j in range(n_factors):
+            if abs(loadings[i, j]) >= threshold:
+                cross_rows.append({
+                    'Шкала': get_name(col_raw),
+                    'Фактор': factor_names[j],
+                    'Нагрузка': round(loadings[i, j], 3),
+                    '|Нагрузка|': round(abs(loadings[i, j]), 3),
+                    'Знак': '+' if loadings[i, j] > 0 else '−'
+                })
+    df_cross = (pd.DataFrame(cross_rows)
+                .sort_values(['Шкала', '|Нагрузка|'], ascending=[True, False])
+                .reset_index(drop=True)) if cross_rows else pd.DataFrame()
+
+    return dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set
+
+
+def render_factor_interpretation(loadings, var_labels_raw, factor_names, threshold, model_label):
+    """Рисует карточки факторов + сводку + кнопку выгрузки в Excel."""
+    dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set = build_factor_interpretation(
+        loadings, var_labels_raw, factor_names, threshold
+    )
+    n_factors = len(factor_names)
+
+    # Карточки по факторам — по 2 в ряд
+    cols_per_row = 2
+    for row_start in range(0, n_factors, cols_per_row):
+        cols = st.columns(cols_per_row)
+        for offset in range(cols_per_row):
+            idx = row_start + offset
+            if idx >= n_factors:
+                break
+            with cols[offset]:
+                with st.container(border=True):
+                    st.markdown(f"#### {factor_names[idx]}")
+                    items = dict_by_factor[idx]
+                    if not items:
+                        st.caption(f"Нет шкал с |нагрузкой| ≥ {threshold:.2f}")
+                    else:
+                        for col_raw, ld in items:
+                            sign = "🔴 +" if ld > 0 else "🔵 −"
+                            cross_marker = " 🟡" if col_raw in cross_set else ""
+                            st.markdown(f"{sign} **{get_name(col_raw)}** — `{ld:+.2f}`{cross_marker}")
+
+    # Сводка
+    st.markdown("##### Сводка по структуре")
+    s1, s2 = st.columns(2)
+    with s1:
+        if cross_set:
+            st.warning(f"🟡 **Cross-loading ({len(cross_set)}):** "
+                       + ", ".join(sorted(get_name(c) for c in cross_set)))
+            st.caption("Шкалы с сильной нагрузкой на 2+ фактора. Их сложно однозначно интерпретировать.")
+        else:
+            st.success("✅ Cross-loading не обнаружено.")
+    with s2:
+        if unloaded_set:
+            st.info(f"⚪ **Не вошли в структуру ({len(unloaded_set)}):** "
+                    + ", ".join(sorted(get_name(c) for c in unloaded_set)))
+            st.caption(f"Шкалы без нагрузок ≥ {threshold:.2f} ни на один фактор.")
+        else:
+            st.success("✅ Все шкалы вошли в структуру.")
+
+    # Excel: 2 листа
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        if not df_grouped.empty:
+            df_grouped.to_excel(writer, index=False, sheet_name='Группировка по факторам')
+        if not df_cross.empty:
+            df_cross.to_excel(writer, index=False, sheet_name='Cross-loadings')
+
+    st.download_button(
+        f"📥 Скачать интерпретацию ({model_label}) — Excel",
+        data=buffer.getvalue(),
+        file_name=f'factor_interpretation_{model_label.lower()}.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        key=f"dl_factor_{model_label.lower()}"
+    )
 # ФАКТОРНЫЙ АНАЛИЗ — первая вкладка; Кронбах — вторая
 subtab_fa, subtab_alpha = st.tabs([
     "🧬 Факторная структура (FA / PCA)",
@@ -168,6 +292,16 @@ with subtab_fa:
             fig_loadings = go.Figure(data=go.Heatmap(z=loadings, x=factor_names, y=translated_fa_cols, colorscale='RdBu_r', zmin=-1, zmax=1, text=np.round(loadings, 2), texttemplate="%{text}", hovertemplate="Шкала: %{y}<br>Компонента: %{x}<br>Нагрузка: %{z:.3f}<extra></extra>"))
             fig_loadings.update_layout(title="Матрица нагрузок PCA", height=max(400, len(fa_cols) * 35))
             st.plotly_chart(fig_loadings, use_container_width=True)
+            # --- АВТОМАТИЧЕСКАЯ ИНТЕРПРЕТАЦИЯ КОМПОНЕНТ ---
+            st.markdown("---")
+            st.markdown("##### 🧭 Автоматическая интерпретация компонент")
+            threshold_pca = st.slider(
+                "Порог значимости нагрузки |loading|:",
+                min_value=0.20, max_value=0.70, value=0.30, step=0.05,
+                key="pca_threshold",
+                help="Шкалы с |нагрузкой| ≥ порога относятся к компоненте. 0.30 — мягкий, 0.40 — средний, 0.50 — строгий."
+            )
+            render_factor_interpretation(loadings, fa_cols, factor_names, threshold_pca, "PCA")
 
         # --- БЛОК 2: EFA ---
         with fa_tab_efa:
@@ -265,6 +399,23 @@ with subtab_fa:
             st.plotly_chart(fig_loadings_efa, use_container_width=True)
 
             st.caption(rotation_info[efa_rotation]["desc"])
+            # --- АВТОМАТИЧЕСКАЯ ИНТЕРПРЕТАЦИЯ ФАКТОРОВ ---
+            st.markdown("---")
+            st.markdown("##### 🧭 Автоматическая интерпретация факторов")
+            threshold_efa = st.slider(
+                "Порог значимости нагрузки |loading|:",
+                min_value=0.20, max_value=0.70, value=0.30, step=0.05,
+                key="efa_threshold",
+                help="Шкалы с |нагрузкой| ≥ порога относятся к фактору. 0.30 — мягкий, 0.40 — средний, 0.50 — строгий."
+            )
+            # Имена факторов с долей дисперсии (если доступно)
+            try:
+                ev_proportions = efa_final.get_factor_variance()[1]
+                factor_names_efa_rich = [f"Фактор {i+1} ({ev_proportions[i]*100:.1f}%)"
+                                         for i in range(n_factors_efa)]
+            except Exception:
+                factor_names_efa_rich = factor_names_efa
+            render_factor_interpretation(loadings_efa, fa_cols, factor_names_efa_rich, threshold_efa, "EFA")
 
     else:
         st.info("Для факторного анализа требуется минимум 3 шкалы.")
