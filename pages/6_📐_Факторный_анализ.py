@@ -58,8 +58,24 @@ def evaluate_sample_adequacy(n_obs, n_vars):
     if ratio < 10:
         return ("🟡", "Приемлемо", f"Соотношение n/переменные = {ratio:.1f}:1 — приемлемо для исследовательских целей.")
     return ("🟢", "Достаточно", f"Соотношение n/переменные = {ratio:.1f}:1 — хорошая статистическая мощность.")
-
-def build_factor_interpretation(loadings, var_labels_raw, factor_names, threshold=0.3):
+@st.cache_data(show_spinner=False)
+def parallel_analysis(n_obs, n_vars, n_iter=100, percentile=95, seed=42):
+    """
+    Параллельный анализ Хорна (Horn, 1965).
+    Генерирует n_iter случайных датасетов размерности (n_obs, n_vars),
+    считает собственные значения и возвращает массив пороговых eigenvalues
+    на заданном перцентиле. Шкалы реальных данных, чьи eigenvalues выше
+    порогов — это «настоящие» факторы, остальное — шум.
+    """
+    rng = np.random.default_rng(seed)
+    random_evs = np.zeros((n_iter, n_vars))
+    for i in range(n_iter):
+        random_data = rng.normal(size=(n_obs, n_vars))
+        pca_random = PCA()
+        pca_random.fit(random_data)
+        random_evs[i] = pca_random.explained_variance_
+    return np.percentile(random_evs, percentile, axis=0)
+def build_factor_interpretation(loadings, var_labels_raw, factor_names, threshold=0.3, df_fa=None):
     """
     Классифицирует шкалы по факторам на основе матрицы нагрузок.
 
@@ -88,6 +104,31 @@ def build_factor_interpretation(loadings, var_labels_raw, factor_names, threshol
                 dict_by_factor[j].append((col_raw, float(loadings[i, j])))
     for j in range(n_factors):
         dict_by_factor[j].sort(key=lambda x: abs(x[1]), reverse=True)
+    # Альфа Кронбаха для каждого фактора (с учётом знака нагрузок)
+    alpha_by_factor = {}
+    if df_fa is not None:
+        for j in range(n_factors):
+            items = dict_by_factor[j]
+            if len(items) < 2:
+                alpha_by_factor[j] = None
+                continue
+            # Инвертируем шкалы с отрицательной нагрузкой,
+            # чтобы все шли в одну сторону (требование α Кронбаха)
+            series_list = []
+            for col_raw, ld in items:
+                s = df_fa[col_raw]
+                if ld < 0:
+                    s = -s
+                series_list.append(s.rename(col_raw))
+            df_factor = pd.concat(series_list, axis=1).dropna()
+            if len(df_factor) < 3:
+                alpha_by_factor[j] = None
+                continue
+            try:
+                a, _ = pg.cronbach_alpha(data=df_factor)
+                alpha_by_factor[j] = float(a)
+            except Exception:
+                alpha_by_factor[j] = None
 
     # Длинная таблица для Excel
     rows = []
@@ -120,13 +161,13 @@ def build_factor_interpretation(loadings, var_labels_raw, factor_names, threshol
                 .sort_values(['Шкала', '|Нагрузка|'], ascending=[True, False])
                 .reset_index(drop=True)) if cross_rows else pd.DataFrame()
 
-    return dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set
+    return dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set, alpha_by_factor
 
 
-def render_factor_interpretation(loadings, var_labels_raw, factor_names, threshold, model_label):
+def render_factor_interpretation(loadings, var_labels_raw, factor_names, threshold, model_label, df_fa=None):
     """Рисует карточки факторов + сводку + кнопку выгрузки в Excel."""
-    dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set = build_factor_interpretation(
-        loadings, var_labels_raw, factor_names, threshold
+    dict_by_factor, df_grouped, df_cross, cross_set, unloaded_set, alpha_by_factor = build_factor_interpretation(
+        loadings, var_labels_raw, factor_names, threshold, df_fa=df_fa
     )
     n_factors = len(factor_names)
 
@@ -141,6 +182,22 @@ def render_factor_interpretation(loadings, var_labels_raw, factor_names, thresho
             with cols[offset]:
                 with st.container(border=True):
                     st.markdown(f"#### {factor_names[idx]}")
+
+                    # Альфа Кронбаха в подзаголовке карточки
+                    a = alpha_by_factor.get(idx)
+                    if a is None:
+                        st.caption("α Кронбаха: — (нужно ≥ 2 шкал)")
+                    else:
+                        if a >= 0.8:
+                            a_emoji, a_label = "🟢", "высокая согласованность"
+                        elif a >= 0.7:
+                            a_emoji, a_label = "🟢", "приемлемая"
+                        elif a >= 0.6:
+                            a_emoji, a_label = "🟡", "сомнительная"
+                        else:
+                            a_emoji, a_label = "🔴", "низкая"
+                        st.caption(f"{a_emoji} α Кронбаха = **{a:.2f}** ({a_label})")
+
                     items = dict_by_factor[idx]
                     if not items:
                         st.caption(f"Нет шкал с |нагрузкой| ≥ {threshold:.2f}")
@@ -149,7 +206,6 @@ def render_factor_interpretation(loadings, var_labels_raw, factor_names, thresho
                             sign = "🔴 +" if ld > 0 else "🔵 −"
                             cross_marker = " 🟡" if col_raw in cross_set else ""
                             st.markdown(f"{sign} **{get_name(col_raw)}** — `{ld:+.2f}`{cross_marker}")
-
     # Сводка
     st.markdown("##### Сводка по структуре")
     s1, s2 = st.columns(2)
@@ -261,7 +317,32 @@ with subtab_fa:
                    "Бартлетт проверяет, *коррелируют ли шкалы* между собой. Все три должны пройти, чтобы факторный анализ имел смысл.")
 
         st.divider()
+# --- ПАРАЛЛЕЛЬНЫЙ АНАЛИЗ ХОРНА (общие настройки для PCA и EFA) ---
+        with st.expander("⚙️ Параметры параллельного анализа Хорна", expanded=False):
+            col_pa1, col_pa2 = st.columns(2)
+            with col_pa1:
+                pa_iter = st.selectbox(
+                    "Количество итераций:",
+                    [50, 100, 500],
+                    index=1,
+                    help="Сколько случайных датасетов сгенерировать для оценки шума. "
+                         "100 — стандарт. 50 — быстрее, но менее точно. 500 — для строгости."
+                )
+            with col_pa2:
+                pa_percentile = st.slider(
+                    "Перцентиль для отсечения шума:",
+                    min_value=50, max_value=99, value=95, step=1,
+                    help=(
+                        "Фактор считается реальным, если его собственное значение выше, "
+                        "чем у указанной доли случайных датасетов той же размерности. "
+                        "**95-й** — стандарт (Glorfeld, 1995). "
+                        "**50-й (медиана)** — оригинальный подход Хорна (1965), менее строгий. "
+                        "**99-й** — очень строгий. "
+                        "Обычно меняют только при методологическом обосновании."
+                    )
+                )
 
+        random_evs = parallel_analysis(n_obs, n_vars, n_iter=pa_iter, percentile=pa_percentile)
         # Внутренние вкладки PCA / EFA
         fa_tab_pca, fa_tab_efa = st.tabs(["PCA (Главные компоненты)", "EFA (Факторный анализ)"])
 
@@ -269,18 +350,45 @@ with subtab_fa:
         with fa_tab_pca:
             pca_full = PCA()
             pca_full.fit(data_scaled)
+            eigenvalues = pca_full.explained_variance_
+
+            kaiser_factors = int(sum(eigenvalues > 1.0))
+            horn_factors = int(sum(eigenvalues > random_evs))
+            recommended_pca = max(1, horn_factors)
 
             col_fa1, col_fa2 = st.columns([1, 2])
             with col_fa1:
-                eigenvalues = pca_full.explained_variance_
-                kaiser_factors = sum(eigenvalues > 1.0)
-                st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors}")
-                n_factors = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors)), key="pca_n")
+                st.success(f"🟢 **По Хорну (parallel analysis):** {horn_factors}")
+                st.caption(f"По Кайзеру (eigenvalue > 1): {kaiser_factors}")
+                n_factors = st.number_input(
+                    "Сколько компонент извлечь?",
+                    min_value=1, max_value=len(fa_cols),
+                    value=recommended_pca,
+                    key="pca_n"
+                )
 
             with col_fa2:
-                fig_scree = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=eigenvalues, mode='lines+markers', name='Собственные значения'))
-                fig_scree.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
-                fig_scree.update_layout(title="График 'Каменистой осыпи' (PCA)", xaxis_title="Номер компоненты", yaxis_title="Собственное значение", height=300)
+                x_axis = list(range(1, len(fa_cols) + 1))
+                fig_scree = go.Figure()
+                fig_scree.add_trace(go.Scatter(
+                    x=x_axis, y=eigenvalues,
+                    mode='lines+markers', name='Реальные данные',
+                    line=dict(color='#1f77b4', width=2)
+                ))
+                fig_scree.add_trace(go.Scatter(
+                    x=x_axis, y=random_evs,
+                    mode='lines+markers', name=f'Случайные (Хорн, p{pa_percentile})',
+                    line=dict(color='#ff7f0e', width=2, dash='dot')
+                ))
+                fig_scree.add_hline(y=1.0, line_dash="dash", line_color="red",
+                                    annotation_text="Порог Кайзера (1.0)")
+                fig_scree.update_layout(
+                    title="График 'Каменистой осыпи' (PCA)",
+                    xaxis_title="Номер компоненты",
+                    yaxis_title="Собственное значение",
+                    height=300,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
                 st.plotly_chart(fig_scree, use_container_width=True)
 
             pca_final = PCA(n_components=n_factors)
@@ -301,7 +409,7 @@ with subtab_fa:
                 key="pca_threshold",
                 help="Шкалы с |нагрузкой| ≥ порога относятся к компоненте. 0.30 — мягкий, 0.40 — средний, 0.50 — строгий."
             )
-            render_factor_interpretation(loadings, fa_cols, factor_names, threshold_pca, "PCA")
+            render_factor_interpretation(loadings, fa_cols, factor_names, threshold_pca, "PCA", df_fa=df_fa)
 
         # --- БЛОК 2: EFA ---
         with fa_tab_efa:
@@ -310,16 +418,43 @@ with subtab_fa:
             efa_full.fit(data_scaled)
             ev, v = efa_full.get_eigenvalues()
 
+            kaiser_factors_efa = int(sum(ev > 1.0))
+            horn_factors_efa = int(sum(ev > random_evs))
+            recommended_efa = max(1, horn_factors_efa)
+
             col_efa1, col_efa2 = st.columns([1, 2])
             with col_efa1:
-                kaiser_factors_efa = sum(ev > 1.0)
-                st.success(f"**Оптимально факторов (по Кайзеру):** {kaiser_factors_efa}")
-                n_factors_efa = st.number_input("Сколько факторов извлечь?", min_value=1, max_value=len(fa_cols), value=max(1, int(kaiser_factors_efa)), key="efa_n")
+                st.success(f"🟢 **По Хорну (parallel analysis):** {horn_factors_efa}")
+                st.caption(f"По Кайзеру (eigenvalue > 1): {kaiser_factors_efa}")
+                n_factors_efa = st.number_input(
+                    "Сколько факторов извлечь?",
+                    min_value=1, max_value=len(fa_cols),
+                    value=recommended_efa,
+                    key="efa_n"
+                )
 
             with col_efa2:
-                fig_scree_efa = go.Figure(data=go.Scatter(x=list(range(1, len(fa_cols) + 1)), y=ev, mode='lines+markers', name='Собственные значения'))
-                fig_scree_efa.add_hline(y=1.0, line_dash="dash", line_color="red", annotation_text="Порог Кайзера (1.0)")
-                fig_scree_efa.update_layout(title="График 'Каменистой осыпи' (EFA)", xaxis_title="Номер фактора", yaxis_title="Собственное значение", height=300)
+                x_axis = list(range(1, len(fa_cols) + 1))
+                fig_scree_efa = go.Figure()
+                fig_scree_efa.add_trace(go.Scatter(
+                    x=x_axis, y=ev,
+                    mode='lines+markers', name='Реальные данные',
+                    line=dict(color='#1f77b4', width=2)
+                ))
+                fig_scree_efa.add_trace(go.Scatter(
+                    x=x_axis, y=random_evs,
+                    mode='lines+markers', name=f'Случайные (Хорн, p{pa_percentile})',
+                    line=dict(color='#ff7f0e', width=2, dash='dot')
+                ))
+                fig_scree_efa.add_hline(y=1.0, line_dash="dash", line_color="red",
+                                       annotation_text="Порог Кайзера (1.0)")
+                fig_scree_efa.update_layout(
+                    title="График 'Каменистой осыпи' (EFA)",
+                    xaxis_title="Номер фактора",
+                    yaxis_title="Собственное значение",
+                    height=300,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
                 st.plotly_chart(fig_scree_efa, use_container_width=True)
 
             # --- РАСШИРЕННЫЕ НАСТРОЙКИ (SPSS-style) ---
@@ -415,7 +550,129 @@ with subtab_fa:
                                          for i in range(n_factors_efa)]
             except Exception:
                 factor_names_efa_rich = factor_names_efa
-            render_factor_interpretation(loadings_efa, fa_cols, factor_names_efa_rich, threshold_efa, "EFA")
+            render_factor_interpretation(loadings_efa, fa_cols, factor_names_efa_rich, threshold_efa, "EFA", df_fa=df_fa)
+            # --- ЭКСПОРТ ФАКТОРНЫХ ОЦЕНОК В ДАТАСЕТ ---
+            st.markdown("---")
+            st.markdown("##### 💾 Сохранить факторы как переменные")
+            st.caption(
+                "Рассчитывает факторные оценки (взвешенные суммы исходных шкал по матрице нагрузок) "
+                "для каждого респондента и добавляет их в датасет как новые колонки. "
+                "Скачайте файл и загрузите его на главной странице — новые «супер-шкалы» появятся "
+                "во всех вкладках (корреляции, сравнение групп, кластеризация и т.д.)."
+            )
+
+            with st.form("factor_export_form"):
+                st.markdown("**Названия факторов** (используются как названия колонок):")
+                factor_custom_names = []
+                cols_per_row = 2
+                for row_start in range(0, n_factors_efa, cols_per_row):
+                    name_cols = st.columns(cols_per_row)
+                    for offset in range(cols_per_row):
+                        idx = row_start + offset
+                        if idx >= n_factors_efa:
+                            break
+                        with name_cols[offset]:
+                            default_name = f"Фактор_{idx + 1}"
+                            custom = st.text_input(
+                                f"Фактор {idx + 1}",
+                                value=default_name,
+                                key=f"factor_name_{idx}"
+                            )
+                            factor_custom_names.append(custom)
+
+                generate_export = st.form_submit_button(
+                    "🔧 Рассчитать факторные оценки",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            if generate_export:
+                # Проверка на дубликаты названий
+                clean_names = [n.strip() if n.strip() else f"Фактор_{i+1}"
+                               for i, n in enumerate(factor_custom_names)]
+                if len(set(clean_names)) != len(clean_names):
+                    st.error("❌ Названия факторов должны быть уникальными. Исправьте дубликаты.")
+                else:
+                    # Рассчитываем факторные оценки методом регрессии
+                    factor_scores = efa_final.transform(data_scaled)
+                    score_col_names = [f"FA_{name.replace(' ', '_')}" for name in clean_names]
+
+                    # Берём весь df (а не только df_fa) и вписываем оценки только для тех строк,
+                    # которые попали в анализ (без пропусков по выбранным шкалам)
+                    df_export = df.copy()
+                    for col in score_col_names:
+                        df_export[col] = np.nan
+                    df_export.loc[df_fa.index, score_col_names] = factor_scores
+
+                    # Сохраняем результат в session_state, чтобы кнопка скачивания
+                    # не сбрасывалась при перерисовке страницы
+                    st.session_state['fa_export_df'] = df_export
+                    st.session_state['fa_export_meta'] = {
+                        'n_factors': n_factors_efa,
+                        'n_respondents': len(df_fa),
+                        'n_total': len(df_export),
+                        'method': efa_method,
+                        'rotation': str(efa_rotation),
+                        'col_names': score_col_names,
+                        'human_names': clean_names,
+                    }
+
+            # Если оценки уже посчитаны — показываем их и кнопку скачивания
+            if 'fa_export_df' in st.session_state:
+                meta = st.session_state['fa_export_meta']
+                st.success(
+                    f"✅ Рассчитано {meta['n_factors']} факторов "
+                    f"для {meta['n_respondents']} из {meta['n_total']} респондентов "
+                    f"(остальные исключены из-за пропусков по выбранным шкалам)."
+                )
+
+                with st.expander("👀 Превью факторных оценок (первые 10 строк)", expanded=False):
+                    preview_df = st.session_state['fa_export_df'][meta['col_names']].head(10)
+                    st.dataframe(preview_df, use_container_width=True)
+
+                with st.expander("📊 Описательная статистика факторных оценок", expanded=False):
+                    desc = st.session_state['fa_export_df'][meta['col_names']].describe().round(3)
+                    st.dataframe(desc, use_container_width=True)
+                    st.caption("Факторные оценки стандартизированы (M ≈ 0, SD ≈ 1).")
+
+                # Excel с двумя листами: данные + метаданные о расчёте
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    st.session_state['fa_export_df'].to_excel(writer, index=False, sheet_name='Данные')
+
+                    meta_rows = [
+                        ['Дата расчёта', pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')],
+                        ['Метод извлечения', meta['method']],
+                        ['Метод вращения', meta['rotation']],
+                        ['Количество факторов', meta['n_factors']],
+                        ['Респондентов с факторными оценками', meta['n_respondents']],
+                        ['Всего респондентов в выборке', meta['n_total']],
+                        ['', ''],
+                        ['Исходные шкалы для FA:', ''],
+                    ]
+                    for c in fa_cols:
+                        meta_rows.append(['', get_name(c)])
+                    meta_rows.append(['', ''])
+                    meta_rows.append(['Названия факторов:', ''])
+                    for human, code in zip(meta['human_names'], meta['col_names']):
+                        meta_rows.append([code, human])
+
+                    pd.DataFrame(meta_rows, columns=['Параметр', 'Значение']).to_excel(
+                        writer, index=False, sheet_name='Метаданные'
+                    )
+
+                st.download_button(
+                    "📥 Скачать датасет с факторами (Excel)",
+                    data=buffer.getvalue(),
+                    file_name=f"data_with_factors_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True
+                )
+
+                if st.button("🗑️ Очистить расчёт", key="clear_fa_export"):
+                    del st.session_state['fa_export_df']
+                    del st.session_state['fa_export_meta']
+                    st.rerun()
 
     else:
         st.info("Для факторного анализа требуется минимум 3 шкалы.")
