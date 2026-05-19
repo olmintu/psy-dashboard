@@ -8,7 +8,7 @@ import seaborn as sns
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, silhouette_samples
 import io
 from utils import render_sidebar, get_name, run_clustering_analysis, smart_compare_groups
 
@@ -449,6 +449,77 @@ with subtab_km:
                         st.info(f"{status} {comment}")
                     else:
                         st.success(f"{status} {comment}")
+                
+                # ========================================================
+                # --- НОВЫЙ БЛОК: ДЕТАЛЬНЫЙ ГРАФИК СИЛУЭТОВ (PLOTLY) ---
+                # ========================================================
+                st.markdown("#### 🌗 Детальный график силуэтов (Silhouette Plot)")
+                st.caption("Показывает качество привязки каждого респондента к своему кластеру. Ширина полосы — размер кластера. Красная линия — средний показатель.")
+                
+                # 1. Получаем РЕАЛЬНЫЕ метки кластеров (как они записаны у вас: 1, 2, 3 или '1', '2'...)
+                cluster_labels_km = res_clustered['Cluster'].values
+                unique_labels = sorted(list(set(cluster_labels_km)))
+                
+                sample_silhouette_values = silhouette_samples(X_km_scaled, cluster_labels_km)
+                
+                fig_sil_details = go.Figure()
+                y_lower = 10
+                colors = px.colors.qualitative.Plotly
+                
+                # 2. Идем циклом по вашим реальным меткам
+                for i, cluster_id in enumerate(unique_labels):
+                    # Вытаскиваем респондентов только текущего кластера
+                    mask = cluster_labels_km == cluster_id
+                    ith_cluster_silhouette_values = sample_silhouette_values[mask]
+                    ith_cluster_silhouette_values.sort()
+                    
+                    size_cluster_i = ith_cluster_silhouette_values.shape[0]
+                    y_upper = y_lower + size_cluster_i
+                    y_range = np.arange(y_lower, y_upper)
+                    
+                    # Железобетонный способ нарисовать заливку (строим замкнутый полигон)
+                    x_poly = np.concatenate([ith_cluster_silhouette_values, [0, 0]])
+                    y_poly = np.concatenate([y_range, [y_upper - 1, y_lower]])
+                    
+                    color = colors[i % len(colors)]
+                    
+                    fig_sil_details.add_trace(go.Scatter(
+                        x=x_poly,
+                        y=y_poly,
+                        mode='lines',
+                        fill='toself',
+                        fillcolor=color,
+                        line=dict(color=color, width=0.5),
+                        name=f'Кластер {cluster_id}'
+                    ))
+                    
+                    fig_sil_details.add_annotation(
+                        x=-0.05, 
+                        y=y_lower + size_cluster_i / 2,
+                        text=str(cluster_id),
+                        showarrow=False,
+                        font=dict(size=14, color=color)
+                    )
+                    
+                    y_lower = y_upper + 10  # Отступ между "лезвиями"
+                
+                fig_sil_details.add_vline(x=sil_final, line_width=2, line_dash="dash", line_color="red", annotation_text="Среднее")
+                
+                fig_sil_details.update_layout(
+                    xaxis_title="Значение коэффициента силуэта",
+                    yaxis=dict(title="Респонденты (сгруппированные по кластерам)", showticklabels=False),
+                    xaxis_range=[-0.1, 1],
+                    height=500,
+                    showlegend=False,
+                    margin=dict(t=30, b=30, l=30, r=30),
+                    hovermode="closest"
+                )
+                
+                st.plotly_chart(fig_sil_details, use_container_width=True)
+                st.markdown("---")
+                # ========================================================
+                # --- КОНЕЦ НОВОГО БЛОКА ---
+                # ========================================================
 
                 c_res1, c_res2 = st.columns(2)
                 with c_res1:
